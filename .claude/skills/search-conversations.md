@@ -5,144 +5,131 @@
 - User asks "what did we discuss about X?"
 - User asks to find a specific topic from past chats
 - User wants to recall something from earlier sessions
+- User types `/search <query>`
 
 ## Instructions
 
 You have access to **claude-finder**, a powerful conversation search system that indexes all Claude Code conversations with AI-generated summaries.
 
-### How to Search
+### CRITICAL: How to Run Search Commands
 
-When the user asks to search conversations, follow these steps:
-
-1. **Run the search** using the Bash tool:
-   ```bash
-   cd /home/akatzfey/projects/redream/claude-finder
-   source venv/bin/activate
-   python3 src/search.py "search query" --days 30 --limit 10
-   ```
-
-2. **Format results** for the user:
-   - Show the conversation summary
-   - Show message summaries
-   - Include timestamps
-   - Show UUIDs for context expansion
-
-3. **Offer progressive disclosure**:
-   - "Would you like me to show the full context for any of these?"
-   - "I can expand the conversation tree to show parent/child messages"
-   - "I can show the full message content (not just the summary)"
-
-### Available Search Options
-
-**Basic search:**
+**ALWAYS use this exact pattern:**
 ```bash
-python3 src/search.py "your search query"
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "your query" --days 30
 ```
 
-**Search with filters:**
+**Why?**
+- Must `cd` to the claude-finder directory first
+- Must activate the virtualenv
+- Must chain with `&&` so if one fails, the rest don't run
+- The search.py script needs the venv's Python packages
+
+### Common Search Patterns
+
+**1. Basic Search (most common)**
 ```bash
-# Last 7 days only
-python3 src/search.py "authentication" --days 7
-
-# Specific project
-python3 src/search.py "react hooks" --project /home/akatzfey/projects/myapp
-
-# Show full content (not just summaries)
-python3 src/search.py "database" --content
-
-# More results
-python3 src/search.py "api" --limit 20
-
-# JSON output (for programmatic parsing)
-python3 src/search.py "refactor" --json
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "authentication bug" --days 30
 ```
 
-**List recent conversations:**
+**2. List Recent Conversations**
 ```bash
-python3 src/search.py --list --days 7
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --list --days 7
 ```
 
-**Get conversation context (progressive disclosure):**
+**3. Get Context Around a Message**
 ```bash
-# Show context around a specific message
-python3 src/search.py --context MESSAGE_UUID --depth 5
-
-# Show full content in context
-python3 src/search.py --context MESSAGE_UUID --depth 5 --content
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --context MESSAGE_UUID --depth 5
 ```
 
-**View conversation tree:**
+**4. Show Full Content (not just summaries)**
 ```bash
-python3 src/search.py --tree SESSION_ID
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "database migration" --days 7 --content
 ```
-
-### Example Workflow
-
-**User asks:** "What did we discuss about React hooks last week?"
-
-**You do:**
-1. Search:
-   ```bash
-   cd /home/akatzfey/projects/redream/claude-finder
-   source venv/bin/activate
-   python3 src/search.py "react hooks" --days 7 --content
-   ```
-
-2. Show results:
-   ```
-   I found 3 conversations about React hooks from last week:
-
-   1. **[Nov 6, 14:23] React Hooks Debugging Session**
-      Project: /home/user/projects/myapp
-
-      User: "Why are my React hooks causing infinite re-renders?"
-      Assistant: "The issue is calling setState in useEffect without dependencies..."
-
-      UUID: abc-123-def
-
-   2. **[Nov 8, 10:15] Custom Hooks Implementation**
-      ...
-   ```
-
-3. Offer options:
-   ```
-   Would you like me to:
-   - Show the full context for any of these conversations?
-   - Resume the conversation at a specific point?
-   - Search for something more specific?
-   ```
-
-### Tips
-
-- **Use quotes** for multi-word searches: `"authentication bug"`
-- **Search summaries first** (fast), then expand to full content if needed
-- **Filter by date** to narrow results: `--days 7`
-- **Check recent conversations** with `--list` if unsure what to search for
-- **Progressive disclosure**: Start with summaries, expand context as needed
-
-### Database Location
-
-- Database: `~/.claude-finder/index.db`
-- Search tool: `/home/akatzfey/projects/redream/claude-finder/src/search.py`
-- Requires: Virtual environment activation
 
 ### Error Handling
 
-If the database doesn't exist:
+**If database is corrupted:**
 ```
-Error: Database not found. Run indexer first:
-  python3 src/indexer.py --days 7
+Error: database disk image is malformed
 ```
 
-If no results found:
-- Try broader search terms
-- Increase `--days` parameter
-- Check `--list` to see what conversations are indexed
+**Fix:**
+```bash
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/indexer.py --days 7 --no-summarize
+```
 
-### After Finding Results
+This rebuilds the database from scratch.
 
-Offer to:
-1. **Show full context** - Expand the conversation tree around a message
-2. **Resume conversation** - Note the session ID and offer to continue that discussion
-3. **Refine search** - Try different search terms
-4. **Show related messages** - Find other messages in the same conversation
+**If database doesn't exist:**
+```
+Error: Database not found
+```
+
+**Fix:** Run the indexer first (same command as above)
+
+### How to Present Results
+
+When you get search results, format them nicely:
+
+1. **Show count**: "I found 5 conversations about authentication bugs"
+
+2. **Show each result**:
+   ```
+   1. [Nov 10, 14:23] WebSocket Debugging Session
+      Project: /home/user/projects/myapp
+
+      User: "User asks about fixing websocket disconnection issues"
+      Assistant: "Suggested checking connection timeout and reconnection logic"
+
+      UUID: abc-123-def
+   ```
+
+3. **Offer options**:
+   ```
+   Would you like me to:
+   - Show the full context for any of these?
+   - Display the complete message content?
+   - Search for something more specific?
+   ```
+
+### Search Tips
+
+- **Single word**: Automatically uses prefix matching (e.g., "auth" matches "authentication")
+- **Multiple words**: Searches for all terms (implicit AND)
+- **Quotes**: Use for exact phrases: `"authentication error"`
+- **Days filter**: `--days 7` for last week, `--days 30` for last month
+- **Project filter**: `--project /home/user/projects/myapp`
+
+### Progressive Disclosure Workflow
+
+1. **Start with summaries** (default, fast)
+2. **If user wants more**, expand context: `--context UUID --depth 5`
+3. **If still not enough**, show full content: `--content`
+4. **If they want to resume**, note the session ID and explain they can use `/resume`
+
+### Example Conversation
+
+**User**: What did we discuss about React hooks last week?
+
+**You**:
+```bash
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "react hooks" --days 7
+```
+
+**Then show results formatted nicely with the count, summaries, and options**
+
+### Important Notes
+
+- Database location: `~/.claude-finder/index.db`
+- Search tool: `~/projects/redream/claude-finder/src/search.py`
+- **Always** chain commands with `&&`
+- **Always** activate venv
+- **Always** cd to the directory first
+
+### If Search Returns 0 Results
+
+Try:
+1. List recent conversations to see what's indexed: `--list`
+2. Use broader search terms
+3. Increase `--days` parameter
+4. Check if the daemon is running to index new messages

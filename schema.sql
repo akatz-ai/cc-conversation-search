@@ -1,6 +1,10 @@
 -- Claude Finder Database Schema
 -- Stores indexed conversation data with tree structure
 
+-- Enable WAL mode for better concurrent access (prevents corruption)
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+
 CREATE TABLE IF NOT EXISTS messages (
     -- Identity
     message_uuid TEXT PRIMARY KEY,

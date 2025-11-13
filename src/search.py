@@ -19,7 +19,11 @@ class ConversationSearch:
                 f"Database not found at {self.db_path}. "
                 "Run the indexer first: python src/indexer.py"
             )
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+
+        # Enable WAL mode for concurrent access
+        self.conn.execute("PRAGMA journal_mode=WAL")
+
         self.conn.row_factory = sqlite3.Row
 
     def search_conversations(
@@ -43,6 +47,20 @@ class ConversationSearch:
         """
         cursor = self.conn.cursor()
 
+        # Sanitize query for FTS5 - escape special characters
+        # FTS5 uses: AND OR NOT " * ( )
+        # For simple searches, just quote the whole thing
+        fts_query = query
+        if not any(op in query for op in [' AND ', ' OR ', ' NOT ', '"']):
+            # Simple query - make it a phrase or use wildcards
+            terms = query.split()
+            if len(terms) == 1:
+                # Single word - use prefix matching
+                fts_query = f'{terms[0]}*'
+            else:
+                # Multiple words - search for all terms (implicit AND)
+                fts_query = ' '.join(f'{term}*' for term in terms)
+
         # Build query
         sql = """
             SELECT
@@ -65,7 +83,7 @@ class ConversationSearch:
             )
         """
 
-        params = [query]
+        params = [fts_query]
 
         if days_back:
             cutoff = (datetime.now() - timedelta(days=days_back)).isoformat()

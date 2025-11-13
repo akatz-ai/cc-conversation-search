@@ -17,6 +17,11 @@ class ConversationIndexer:
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path))
+
+        # Enable WAL mode for concurrent access (prevents corruption)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+
         self.conn.row_factory = sqlite3.Row
         self._init_db()
         self._anthropic_client = None  # Lazy-loaded when needed

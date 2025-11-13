@@ -54,7 +54,11 @@ class ConversationWatcher(FileSystemEventHandler):
         1. It exists in the DB (has been indexed)
         2. Its summary is just truncated content (not AI-generated)
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+
+        # Enable WAL mode for concurrent access
+        conn.execute("PRAGMA journal_mode=WAL")
+
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -207,7 +211,11 @@ JSON output:"""
 
     def update_summaries(self, summaries: List[Dict]) -> int:
         """Update database with new summaries"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+
+        # Enable WAL mode for concurrent access
+        conn.execute("PRAGMA journal_mode=WAL")
+
         cursor = conn.cursor()
 
         updated = 0
