@@ -1,2 +1,2 @@
 # Claude Finder dependencies
-anthropic>=0.39.0  # For Haiku summarization via API
+watchdog>=3.0.0  # File system monitoring for background daemon

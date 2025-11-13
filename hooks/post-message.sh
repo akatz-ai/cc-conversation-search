@@ -52,9 +52,26 @@ fi
     echo $$ > "$LOCK_FILE"
     trap "rm -f $LOCK_FILE" EXIT
 
-    # Index only the last day, without verbose output
-    # Use --no-summarize if you don't have an API key configured
+    # Strategy: First ensure messages are indexed (without summaries)
+    # Then call Haiku agent to add summaries to recent messages
+
+    # Step 1: Quick index without summaries (fast)
     "$VENV_PYTHON" "$INDEXER" --days 1 --no-summarize > /dev/null 2>&1
+
+    # Step 2: Use Haiku agent to summarize last 10 messages from current conversation
+    # Get the most recent conversation file
+    PROJECTS_DIR="$HOME/.claude/projects"
+    CURRENT_PROJECT=$(echo "$PWD" | sed 's|/|-|g')
+    CURRENT_CONV_DIR="$PROJECTS_DIR/$CURRENT_PROJECT"
+
+    if [ -d "$CURRENT_CONV_DIR" ]; then
+        LATEST_CONV=$(ls -t "$CURRENT_CONV_DIR"/*.jsonl 2>/dev/null | grep -v 'agent-' | head -1)
+
+        if [ -n "$LATEST_CONV" ]; then
+            SUMMARIZER="$CLAUDE_FINDER_DIR/src/summarize_and_index.py"
+            "$VENV_PYTHON" "$SUMMARIZER" "$LATEST_CONV" 10 > /dev/null 2>&1
+        fi
+    fi
 
 ) &
 
