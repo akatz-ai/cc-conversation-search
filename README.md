@@ -37,15 +37,47 @@ A powerful conversation indexing and search system for Claude Code that enables 
 1. **Clone and setup**:
    ```bash
    cd /path/to/claude-finder
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
    chmod +x src/indexer.py src/search.py hooks/post-message.sh
    ```
 
-2. **Initial indexing** (index last 7 days):
+2. **Configure Haiku summarization** (optional but recommended):
+
+   Haiku generates concise 1-2 sentence summaries for each message. To enable it, set your Anthropic API key using one of these methods:
+
+   **Option A: Environment variable** (temporary, per-session):
    ```bash
-   python3 src/indexer.py --days 7
+   export ANTHROPIC_API_KEY='sk-ant-api03-...'
    ```
 
-3. **Install hook** (optional - for automatic indexing):
+   **Option B: Config file** (persistent, recommended):
+   ```bash
+   mkdir -p ~/.claude-finder
+   echo '{"anthropic_api_key": "sk-ant-api03-..."}' > ~/.claude-finder/config.json
+   ```
+
+   **Option C: Key file** (simple):
+   ```bash
+   echo 'sk-ant-api03-...' > ~/.anthropic_key
+   ```
+
+   Get your API key from: https://console.anthropic.com/settings/keys
+
+   **Note**: Without an API key, the indexer will use smart truncation (first 150 chars) instead of AI summaries. This still works well for most use cases!
+
+3. **Initial indexing**:
+   ```bash
+   # With Haiku summaries (recommended, requires API key)
+   source venv/bin/activate
+   python3 src/indexer.py --days 7
+
+   # OR without summaries (faster, no API key needed)
+   python3 src/indexer.py --days 7 --no-summarize
+   ```
+
+4. **Install hook** (optional - for automatic indexing):
    ```bash
    # Set the installation directory
    export CLAUDE_FINDER_DIR=/path/to/claude-finder

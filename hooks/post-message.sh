@@ -5,9 +5,15 @@
 set -e
 
 # Path to the claude-finder installation
-CLAUDE_FINDER_DIR="${CLAUDE_FINDER_DIR:-$(dirname $(dirname $0))}"
+CLAUDE_FINDER_DIR="${CLAUDE_FINDER_DIR:-$(dirname $(dirname $(readlink -f $0)))}"
+VENV_PYTHON="$CLAUDE_FINDER_DIR/venv/bin/python3"
 INDEXER="$CLAUDE_FINDER_DIR/src/indexer.py"
 LOCK_FILE="$HOME/.claude-finder/indexer.lock"
+
+# Use system python if venv doesn't exist
+if [ ! -f "$VENV_PYTHON" ]; then
+    VENV_PYTHON="python3"
+fi
 
 # Only run indexing periodically (every 10th message) to avoid overhead
 # Use a simple counter file
@@ -47,7 +53,8 @@ fi
     trap "rm -f $LOCK_FILE" EXIT
 
     # Index only the last day, without verbose output
-    python3 "$INDEXER" --days 1 > /dev/null 2>&1
+    # Use --no-summarize if you don't have an API key configured
+    "$VENV_PYTHON" "$INDEXER" --days 1 --no-summarize > /dev/null 2>&1
 
 ) &
 

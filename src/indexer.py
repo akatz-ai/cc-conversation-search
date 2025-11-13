@@ -10,7 +10,6 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-import subprocess
 
 
 class ConversationIndexer:
@@ -20,6 +19,7 @@ class ConversationIndexer:
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self._init_db()
+        self._anthropic_client = None  # Lazy-loaded when needed
 
     def _init_db(self):
         """Initialize database with schema"""
@@ -27,6 +27,54 @@ class ConversationIndexer:
         with open(schema_path) as f:
             self.conn.executescript(f.read())
         self.conn.commit()
+
+    def _get_anthropic_client(self):
+        """Lazy-load Anthropic client with API key"""
+        if self._anthropic_client is not None:
+            return self._anthropic_client
+
+        try:
+            import anthropic
+        except ImportError:
+            return None
+
+        # Try to get API key from multiple sources
+        api_key = None
+
+        # 1. Environment variable
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+
+        # 2. Config file
+        if not api_key:
+            config_path = Path.home() / ".claude-finder" / "config.json"
+            if config_path.exists():
+                try:
+                    with open(config_path) as f:
+                        config = json.load(f)
+                        api_key = config.get('anthropic_api_key')
+                except:
+                    pass
+
+        # 3. User's shell profile (if set)
+        if not api_key:
+            try:
+                # Try reading from shell config
+                anthropic_key_file = Path.home() / ".anthropic_key"
+                if anthropic_key_file.exists():
+                    with open(anthropic_key_file) as f:
+                        api_key = f.read().strip()
+            except:
+                pass
+
+        if not api_key:
+            return None
+
+        try:
+            self._anthropic_client = anthropic.Anthropic(api_key=api_key)
+            return self._anthropic_client
+        except Exception as e:
+            print(f"  Warning: Error creating Anthropic client: {e}")
+            return None
 
     def scan_conversations(self, days_back: Optional[int] = 1) -> List[Path]:
         """
@@ -132,8 +180,6 @@ class ConversationIndexer:
     def summarize_message(self, message: Dict) -> str:
         """
         Use Haiku to generate a 1-2 sentence summary of a message
-
-        This calls claude with Haiku model via subprocess
         """
         content = message['content']
         message_type = message['message_type']
@@ -142,8 +188,15 @@ class ConversationIndexer:
         if len(content) < 50:
             return content[:100]
 
-        # Truncate very long messages for summarization
-        content_snippet = content[:2000]
+        # Truncate very long messages for summarization (Haiku context limit)
+        content_snippet = content[:3000]
+
+        # Try to use Haiku via Anthropic API
+        client = self._get_anthropic_client()
+
+        if client is None:
+            # Fallback: use first 150 chars
+            return content[:147] + "..." if len(content) > 150 else content
 
         prompt = f"""Summarize this {message_type} message in 1-2 concise sentences (max 150 chars). Focus on the main action, question, or response.
 
@@ -153,26 +206,26 @@ Message:
 Summary:"""
 
         try:
-            # Call claude CLI with Haiku model
-            result = subprocess.run(
-                ['claude', '--model', 'haiku', '--no-markdown', prompt],
-                capture_output=True,
-                text=True,
-                timeout=10
+            response = client.messages.create(
+                model="claude-haiku-4-20250514",
+                max_tokens=100,
+                temperature=0.3,
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
             )
 
-            if result.returncode == 0:
-                summary = result.stdout.strip()
-                # Ensure it's not too long
-                if len(summary) > 200:
-                    summary = summary[:197] + "..."
-                return summary
-            else:
-                # Fallback: use first 150 chars
-                return content[:147] + "..." if len(content) > 150 else content
+            summary = response.content[0].text.strip()
 
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            print(f"Error calling Haiku for summarization: {e}")
+            # Ensure it's not too long
+            if len(summary) > 200:
+                summary = summary[:197] + "..."
+
+            return summary
+
+        except Exception as e:
+            print(f"  Warning: Haiku summarization failed: {e}")
             # Fallback
             return content[:147] + "..." if len(content) > 150 else content
 
