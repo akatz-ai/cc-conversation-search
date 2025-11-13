@@ -19,12 +19,13 @@ from watchdog.events import FileSystemEventHandler
 class ConversationWatcher(FileSystemEventHandler):
     """Watches conversation files and tracks unsummarized messages"""
 
-    def __init__(self, db_path: Path, batch_size: int = 10):
+    def __init__(self, db_path: Path, batch_size: int = 10, verbose: bool = False):
         self.db_path = db_path
         self.batch_size = batch_size
         self.pending_files: Set[Path] = set()
         self.last_process_time = time.time()
         self.min_batch_interval = 30  # Wait at least 30s between batches
+        self.verbose = verbose
 
     def on_modified(self, event):
         """Called when a file is modified"""
@@ -35,6 +36,9 @@ class ConversationWatcher(FileSystemEventHandler):
 
         # Only watch .jsonl conversation files (not agent files)
         if file_path.suffix == '.jsonl' and not file_path.stem.startswith('agent-'):
+            if self.verbose:
+                print(f"  📝 Detected change: {file_path.name}")
+
             self.pending_files.add(file_path)
 
             # Check if we should process now
@@ -118,15 +122,27 @@ class ConversationWatcher(FileSystemEventHandler):
                 summary = result['summary']
                 full_content = result['full_content']
 
-                # Check if summary is just truncated content (needs AI summary)
-                # Heuristic: if summary is exactly first 147 chars + "..." or similar
+                # Check if summary needs AI generation
+                # A message needs summarization if:
+                # 1. Summary is empty or very short (< 50 chars)
+                # 2. Summary is just tool markers like "[Tool: Bash]"
+                # 3. Summary is truncated content (ends with ... or is exactly 147-150 chars)
+                # 4. Summary equals the full content (no actual summarization happened)
+
                 is_truncated = (
-                    summary.endswith('...') and
-                    len(summary) >= 140 and
-                    full_content.startswith(summary[:-3].strip())
+                    summary.endswith('...') or  # Explicit truncation marker
+                    (145 <= len(summary) <= 150 and len(full_content) > len(summary))  # Likely truncated by indexer
                 )
 
-                if is_truncated:
+                needs_summary = (
+                    len(summary) < 50 or  # Too short to be useful
+                    summary.startswith('[Tool') or  # Just tool markers
+                    is_truncated or  # Truncated by indexer
+                    summary == full_content  # No summarization happened
+                )
+
+                if needs_summary and len(full_content) > 50:
+                    # Only summarize if there's actually content to summarize
                     unsummarized.append(msg)
 
         conn.close()
@@ -292,6 +308,13 @@ def ensure_indexed():
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Claude Finder Watcher Daemon')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                       help='Print file change events as they happen')
+    args = parser.parse_args()
+
     print("Claude Finder Watcher Daemon")
     print("=" * 50)
 
@@ -314,9 +337,11 @@ def main():
     # Setup file watcher
     print(f"\nWatching: {projects_dir}")
     print("Batch size: 10 messages (or 30s delay)")
+    if args.verbose:
+        print("Verbose mode: ON (will print file changes as they happen)")
     print("Press Ctrl+C to stop\n")
 
-    event_handler = ConversationWatcher(db_path, batch_size=10)
+    event_handler = ConversationWatcher(db_path, batch_size=10, verbose=args.verbose)
     observer = Observer()
     observer.schedule(event_handler, str(projects_dir), recursive=True)
     observer.start()
