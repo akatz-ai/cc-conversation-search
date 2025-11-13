@@ -11,11 +11,15 @@
 
 You have access to **claude-finder**, a powerful conversation search system that indexes all Claude Code conversations with AI-generated summaries.
 
+### NEW: Context-First Search (Default)
+
+**The system now uses a context-first approach** where you READ recent conversation summaries directly instead of doing keyword searches. This lets you use semantic understanding to find relevant messages.
+
 ### CRITICAL: How to Run Search Commands
 
 **ALWAYS use this exact pattern:**
 ```bash
-cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "your query" --days 30
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --load --days 1
 ```
 
 **Why?**
@@ -26,24 +30,32 @@ cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/s
 
 ### Common Search Patterns
 
-**1. Basic Search (most common)**
+**1. Load Recent Context (NEW - Use this first!)**
+```bash
+# Load last 1 day (default for quick searches)
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --load --days 1
+
+# Load last 3 days (for broader searches)
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --load --days 3
+
+# Load last week
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --load --days 7
+```
+
+**2. Get Full Message Content (after identifying relevant UUIDs)**
+```bash
+# Fetch full content for one or more messages
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --full abc123de fgh456ij
+```
+
+**3. Legacy Keyword Search (fallback if context mode doesn't work)**
 ```bash
 cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "authentication bug" --days 30
 ```
 
-**2. List Recent Conversations**
+**4. List Conversations Only**
 ```bash
 cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --list --days 7
-```
-
-**3. Get Context Around a Message**
-```bash
-cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --context MESSAGE_UUID --depth 5
-```
-
-**4. Show Full Content (not just summaries)**
-```bash
-cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "database migration" --days 7 --content
 ```
 
 ### Error Handling
@@ -67,56 +79,53 @@ Error: Database not found
 
 **Fix:** Run the indexer first (same command as above)
 
-### How to Present Results
+### How to Use Context-First Search
 
-When you get search results, format them nicely:
+**The new workflow:**
 
-1. **Show count**: "I found 5 conversations about authentication bugs"
+1. **Load context** - Get all recent conversation summaries into your context
+2. **Read and understand** - Use your semantic understanding to identify relevant messages
+3. **Fetch full content** - Get complete message text for the UUIDs you identified
+4. **Answer the user** - Synthesize and present the relevant information
 
-2. **Show each result**:
-   ```
-   1. [Nov 10, 14:23] WebSocket Debugging Session
-      Project: /home/user/projects/myapp
+### Example Workflow
 
-      User: "User asks about fixing websocket disconnection issues"
-      Assistant: "Suggested checking connection timeout and reconnection logic"
+**User**: "What did we discuss about git yesterday?"
 
-      UUID: abc-123-def
-   ```
-
-3. **Offer options**:
-   ```
-   Would you like me to:
-   - Show the full context for any of these?
-   - Display the complete message content?
-   - Search for something more specific?
-   ```
-
-### Search Tips
-
-- **Single word**: Automatically uses prefix matching (e.g., "auth" matches "authentication")
-- **Multiple words**: Searches for all terms (implicit AND)
-- **Quotes**: Use for exact phrases: `"authentication error"`
-- **Days filter**: `--days 7` for last week, `--days 30` for last month
-- **Project filter**: `--project /home/user/projects/myapp`
-
-### Progressive Disclosure Workflow
-
-1. **Start with summaries** (default, fast)
-2. **If user wants more**, expand context: `--context UUID --depth 5`
-3. **If still not enough**, show full content: `--content`
-4. **If they want to resume**, note the session ID and explain they can use `/resume`
-
-### Example Conversation
-
-**User**: What did we discuss about React hooks last week?
-
-**You**:
+**Step 1: Load context**
 ```bash
-cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py "react hooks" --days 7
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --load --days 1
 ```
 
-**Then show results formatted nicely with the count, summaries, and options**
+**Step 2: Read the output**
+You'll see something like:
+```
+## [6319c5f7] Redream Frontend: Vue vs React Architecture
+**485 msgs** | /home/akatzfey/projects/redream | Nov-13 08:51
+
+👤 08:23 `7adb9397` User asks about git commit history
+🤖 08:24 `27eb3931` Explained how to use git log with filters
+👤 08:25 `742644d3` Thanks, that worked!
+...
+```
+
+**Step 3: Identify relevant messages**
+You spot messages `7adb9397` and `27eb3931` are about git.
+
+**Step 4: Fetch full content**
+```bash
+cd ~/projects/redream/claude-finder && source venv/bin/activate && python3 src/search.py --full 7adb9397 27eb3931
+```
+
+**Step 5: Answer the user**
+"Yesterday we discussed git commit history. You asked how to filter git logs, and I explained using `git log --since` and `--grep` options. Here's the full exchange: [show content]"
+
+### When to Use Each Mode
+
+- **--load**: Default for all searches. Loads summaries for semantic understanding.
+- **--full UUID**: After identifying relevant messages, get their complete text.
+- **--list**: Quick overview of recent conversations (just titles).
+- **Legacy query**: Only if context mode fails or you need precise keyword matching.
 
 ### Important Notes
 

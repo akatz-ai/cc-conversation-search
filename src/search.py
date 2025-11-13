@@ -269,6 +269,116 @@ class ConversationSearch:
         result = cursor.fetchone()
         return result['full_content'] if result else None
 
+    def get_full_messages(self, uuids: List[str]) -> List[Dict]:
+        """Batch fetch full content for multiple messages. Supports UUID prefixes."""
+        if not uuids:
+            return []
+
+        cursor = self.conn.cursor()
+        results = []
+
+        for uuid in uuids:
+            # If it's a short UUID (8 chars), use prefix matching
+            if len(uuid) <= 8:
+                cursor.execute("""
+                    SELECT message_uuid, full_content, timestamp, message_type,
+                           project_path, summary
+                    FROM messages
+                    WHERE message_uuid LIKE ?
+                    ORDER BY timestamp
+                    LIMIT 1
+                """, (f"{uuid}%",))
+            else:
+                # Full UUID
+                cursor.execute("""
+                    SELECT message_uuid, full_content, timestamp, message_type,
+                           project_path, summary
+                    FROM messages
+                    WHERE message_uuid = ?
+                """, (uuid,))
+
+            row = cursor.fetchone()
+            if row:
+                results.append(dict(row))
+
+        return results
+
+    def load_context(
+        self,
+        days_back: int = 1,
+        project_path: Optional[str] = None,
+        max_conversations: int = 10,
+        max_messages_per_conv: int = 50
+    ) -> str:
+        """
+        Load recent conversation context for Claude to read directly.
+        Returns token-efficient formatted text.
+        """
+        cursor = self.conn.cursor()
+
+        # Get recent conversations
+        cutoff = (datetime.now() - timedelta(days=days_back)).isoformat()
+        sql = """
+            SELECT session_id, conversation_summary, project_path,
+                   message_count, last_message_at
+            FROM conversations
+            WHERE last_message_at >= ?
+        """
+        params = [cutoff]
+
+        if project_path:
+            sql += " AND project_path = ?"
+            params.append(project_path)
+
+        sql += " ORDER BY last_message_at DESC LIMIT ?"
+        params.append(max_conversations)
+
+        cursor.execute(sql, params)
+        conversations = [dict(row) for row in cursor.fetchall()]
+
+        if not conversations:
+            return f"No conversations found in the last {days_back} day(s)."
+
+        # Build output
+        lines = [f"# Conversations (last {days_back} day{'s' if days_back != 1 else ''})\n"]
+
+        for conv in conversations:
+            # Get messages for this conversation
+            cursor.execute("""
+                SELECT message_uuid, timestamp, message_type, summary,
+                       is_sidechain, project_path
+                FROM messages
+                WHERE session_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (conv['session_id'], max_messages_per_conv))
+
+            messages = [dict(row) for row in cursor.fetchall()]
+            messages.reverse()  # Chronological order
+
+            # Format conversation block
+            ts = datetime.fromisoformat(conv['last_message_at'].replace('Z', '+00:00'))
+            date_str = ts.strftime('%b-%d')
+            time_str = ts.strftime('%H:%M')
+            session_short = conv['session_id'][:8]
+
+            lines.append(f"## [{session_short}] {conv['conversation_summary']}")
+            lines.append(f"**{conv['message_count']} msgs** | {conv['project_path']} | {date_str} {time_str}\n")
+
+            # Format messages compactly
+            for msg in messages:
+                msg_ts = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
+                msg_time = msg_ts.strftime('%H:%M')
+                icon = "👤" if msg['message_type'] == 'user' else "🤖"
+                branch = "🌿 " if msg['is_sidechain'] else ""
+                uuid_short = msg['message_uuid'][:8]
+
+                lines.append(f"{icon} {msg_time} `{uuid_short}` {branch}{msg['summary']}")
+
+            lines.append("")  # Blank line between conversations
+
+        return "\n".join(lines)
+
     def close(self):
         """Close database connection"""
         self.conn.close()
@@ -301,7 +411,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Search Claude Code conversations')
-    parser.add_argument('query', nargs='?', help='Search query')
+    parser.add_argument('query', nargs='?', help='Search query (legacy keyword search)')
     parser.add_argument('--days', type=int, default=7,
                        help='Search last N days (default: 7)')
     parser.add_argument('--limit', type=int, default=20,
@@ -315,6 +425,10 @@ def main():
                        help='Show full conversation tree')
     parser.add_argument('--list', action='store_true',
                        help='List recent conversations')
+    parser.add_argument('--load', action='store_true',
+                       help='Load recent context for Claude to read (NEW: context-first mode)')
+    parser.add_argument('--full', metavar='UUID', nargs='+',
+                       help='Fetch full content for message UUIDs')
     parser.add_argument('--content', action='store_true',
                        help='Show full message content')
     parser.add_argument('--json', action='store_true',
@@ -327,7 +441,36 @@ def main():
     search = ConversationSearch(db_path=args.db)
 
     try:
-        if args.list:
+        if args.load:
+            # NEW: Context-first mode
+            context = search.load_context(
+                days_back=args.days,
+                project_path=args.project
+            )
+            print(context)
+
+        elif args.full:
+            # NEW: Fetch full content for specific UUIDs
+            messages = search.get_full_messages(args.full)
+            if args.json:
+                print(json.dumps(messages, indent=2))
+            else:
+                for msg in messages:
+                    ts = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
+                    time_str = ts.strftime('%Y-%m-%d %H:%M')
+                    icon = "👤" if msg['message_type'] == 'user' else "🤖"
+                    print(f"\n{icon} [{time_str}] {msg['project_path']}")
+                    print(f"UUID: {msg['message_uuid']}")
+                    print(f"Summary: {msg['summary']}\n")
+                    print("--- Full Content ---")
+                    content = msg['full_content']
+                    if len(content) > 5000 and not args.content:
+                        print(content[:5000] + f"\n\n... (truncated, {len(content)} chars total)")
+                    else:
+                        print(content)
+                    print("-" * 50)
+
+        elif args.list:
             results = search.list_recent_conversations(
                 days_back=args.days,
                 limit=args.limit,
