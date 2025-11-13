@@ -1,0 +1,11 @@
+*.pyc
+__pycache__/
+*.db
+*.db-journal
+.DS_Store
+*.log
+.venv/
+venv/
+*.swp
+*.swo
+*~

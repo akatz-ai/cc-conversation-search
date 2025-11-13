@@ -1,0 +1,5 @@
+# Claude Finder has no external Python dependencies!
+# It uses only the Python standard library (sqlite3, json, pathlib, etc.)
+#
+# The only external dependency is the 'claude' CLI tool for Haiku summarization,
+# which should already be installed if you're using Claude Code.
