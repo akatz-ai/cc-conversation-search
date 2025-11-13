@@ -323,8 +323,14 @@ class ConversationSearch:
                    message_count, last_message_at
             FROM conversations
             WHERE last_message_at >= ?
+                AND conversation_summary IS NOT NULL
+                AND conversation_summary != 'None'
+                AND message_count > 2
         """
         params = [cutoff]
+
+        # Filter out daemon internal conversations (Haiku summarization calls)
+        sql += " AND NOT (project_path LIKE '%claude/finder' AND message_count < 5)"
 
         if project_path:
             sql += " AND project_path = ?"
@@ -365,15 +371,26 @@ class ConversationSearch:
             lines.append(f"## [{session_short}] {conv['conversation_summary']}")
             lines.append(f"**{conv['message_count']} msgs** | {conv['project_path']} | {date_str} {time_str}\n")
 
-            # Format messages compactly
+            # Filter and format messages compactly
+            # Skip tool use/result noise, only show actual conversational content
             for msg in messages:
+                summary = msg['summary'] or ""
+
+                # Skip tool-only messages (noise)
+                if (not summary or
+                    summary.startswith('[Tool') or
+                    summary == '[Tool result]' or
+                    summary.startswith('[Request interrupted') or
+                    len(summary.strip()) < 10):  # Skip very short/empty summaries
+                    continue
+
                 msg_ts = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
                 msg_time = msg_ts.strftime('%H:%M')
                 icon = "👤" if msg['message_type'] == 'user' else "🤖"
                 branch = "🌿 " if msg['is_sidechain'] else ""
                 uuid_short = msg['message_uuid'][:8]
 
-                lines.append(f"{icon} {msg_time} `{uuid_short}` {branch}{msg['summary']}")
+                lines.append(f"{icon} {msg_time} `{uuid_short}` {branch}{summary}")
 
             lines.append("")  # Blank line between conversations
 
