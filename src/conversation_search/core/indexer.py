@@ -213,15 +213,106 @@ class ConversationIndexer:
 
         return depths
 
+    def _mark_ancestor_chain_to_user(self, search_message_uuid: str, msg_map: Dict, meta_uuids: set) -> None:
+        """
+        Walk up the message tree from a search message to the originating user message.
+
+        Marks all messages in the ancestor chain as meta-conversations, stopping when
+        we reach a user message with actual content (not tool results or infrastructure).
+
+        Args:
+            search_message_uuid: UUID of the message that uses conversation-search
+            msg_map: Dictionary mapping UUID -> message for O(1) lookups
+            meta_uuids: Set of marked UUIDs (mutated in place)
+        """
+        current_uuid = search_message_uuid
+        visited = set()  # Cycle detection
+
+        while current_uuid:
+            # Safety: detect cycles
+            if current_uuid in visited:
+                break
+            visited.add(current_uuid)
+
+            # Safety: handle orphaned messages
+            current = msg_map.get(current_uuid)
+            if not current:
+                break
+
+            # Mark this message
+            meta_uuids.add(current_uuid)
+            current['is_meta_conversation'] = True
+
+            # Stop at first REAL user message (not tool results/infrastructure)
+            if current.get('message_type') == 'user':
+                content = current.get('content', '').strip()
+                # Skip system-generated user messages
+                if (not content.startswith('[Tool') and
+                    not content.startswith('<command-message>') and
+                    not content.startswith('Base directory')):
+                    break  # Found real user message
+
+            # Continue walking up
+            current_uuid = current.get('parent_uuid')
+
+    def _mark_descendant_chain(self, search_message_uuid: str, children_map: Dict, msg_map: Dict, meta_uuids: set) -> None:
+        """
+        Walk down from search message to mark search results and descendants.
+
+        Marks descendants of the search message (tool results, processing, answer) until
+        we hit a real user message (indicating follow-up work) or conversation ends.
+
+        Args:
+            search_message_uuid: UUID of the message that uses conversation-search
+            children_map: Dictionary mapping parent_uuid -> list of child UUIDs
+            msg_map: Dictionary mapping UUID -> message for O(1) lookups
+            meta_uuids: Set of marked UUIDs (mutated in place)
+        """
+        current_uuid = search_message_uuid
+        visited = set()
+        max_depth = 20  # Safety limit for downward walk
+
+        for _ in range(max_depth):
+            # Already marked this one, get children
+            children = children_map.get(current_uuid, [])
+
+            # No children = end of conversation
+            if not children:
+                break
+
+            # Take first child (main chain, ignore sidechains for now)
+            child_uuid = children[0]
+
+            # Safety: detect cycles
+            if child_uuid in visited:
+                break
+            visited.add(child_uuid)
+
+            child = msg_map.get(child_uuid)
+            if not child:
+                break
+
+            # Check if this is a real user message (stop condition)
+            if child.get('message_type') == 'user':
+                content = child.get('content', '').strip()
+                # If it's NOT a system message, this is real follow-up work
+                if (not content.startswith('[Tool') and
+                    not content.startswith('<command-message>') and
+                    not content.startswith('Base directory')):
+                    break  # Stop before real user message
+
+            # Mark and continue
+            meta_uuids.add(child_uuid)
+            child['is_meta_conversation'] = True
+            current_uuid = child_uuid
+
     def _mark_meta_conversations(self, messages: List[Dict]) -> set:
         """
-        Find and mark user-request + claude-search pairs as meta-conversations.
+        Find and mark conversation-search usage, ancestors, and descendants as meta.
 
-        This identifies message pairs where:
-        1. User asks to find a conversation
-        2. Claude responds by using cc-conversation-search
-
-        These pairs are "meta-conversations" that should be marked to exclude from search.
+        Walks up from search messages to find originating user requests, and walks
+        down to mark search results. This filters entire meta-conversation transactions
+        where users ask Claude to search for past conversations and receive results.
 
         Args:
             messages: List of message dicts with uuid, parent_uuid, message_type, content
@@ -230,27 +321,31 @@ class ConversationIndexer:
             Set of message UUIDs that are meta-conversations
         """
         meta_uuids = set()
-
-        # Build UUID -> message map for fast lookup
         msg_map = {m['uuid']: m for m in messages}
 
-        # Find all Claude messages that use conversation-search
+        # Build children map for downward traversal
+        children_map = {}
+        for message in messages:
+            parent_uuid = message.get('parent_uuid')
+            if parent_uuid:
+                if parent_uuid not in children_map:
+                    children_map[parent_uuid] = []
+                children_map[parent_uuid].append(message['uuid'])
+
+        # Find all messages that use conversation-search
         for message in messages:
             if not message_uses_conversation_search(message):
                 continue
 
-            # Found a search message - mark it as meta-conversation
+            # Mark search message
             meta_uuids.add(message['uuid'])
             message['is_meta_conversation'] = True
 
-            # Mark its parent (the user's search request)
-            parent_uuid = message.get('parent_uuid')
-            if parent_uuid and parent_uuid in msg_map:
-                # Verify parent is a user message (sanity check)
-                parent = msg_map[parent_uuid]
-                if parent.get('message_type') == 'user':
-                    meta_uuids.add(parent_uuid)
-                    parent['is_meta_conversation'] = True
+            # Walk up to originating user message
+            self._mark_ancestor_chain_to_user(message['uuid'], msg_map, meta_uuids)
+
+            # Walk down to mark search results
+            self._mark_descendant_chain(message['uuid'], children_map, msg_map, meta_uuids)
 
         return meta_uuids
 

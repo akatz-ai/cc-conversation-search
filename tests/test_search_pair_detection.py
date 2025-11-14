@@ -406,7 +406,7 @@ class TestMarkMetaConversations:
         assert 'msg-a' in meta_uuids
 
     def test_search_response_with_assistant_parent(self):
-        """Should not add parent if parent is not a user message."""
+        """Should walk up and mark entire chain, even if no user message found."""
         messages = [
             {
                 'uuid': 'msg-a',
@@ -425,9 +425,10 @@ class TestMarkMetaConversations:
         indexer = ConversationIndexer(db_path=":memory:")
         meta_uuids = indexer._mark_meta_conversations(messages)
 
-        # Should skip search response but not assistant parent
-        assert meta_uuids == {'msg-b'}
-        assert 'msg-a' not in meta_uuids
+        # NEW BEHAVIOR: Walk up and mark entire ancestor chain
+        assert meta_uuids == {'msg-a', 'msg-b'}
+        assert messages[0].get('is_meta_conversation') is True
+        assert messages[1].get('is_meta_conversation') is True
 
     def test_skill_activation_markers(self):
         """Should detect pairs using skill activation markers."""
@@ -450,6 +451,229 @@ class TestMarkMetaConversations:
         meta_uuids = indexer._mark_meta_conversations(messages)
 
         assert meta_uuids == {'msg-a', 'msg-b'}
+
+    def test_walks_up_tree_to_originating_user_message(self):
+        """Should walk up through intermediate messages to find originating user request."""
+        messages = [
+            {
+                'uuid': 'user-root',
+                'parent_uuid': None,
+                'message_type': 'user',
+                'content': 'Can you summarize the projects we worked on yesterday?'
+            },
+            {
+                'uuid': 'asst-1',
+                'parent_uuid': 'user-root',
+                'message_type': 'assistant',
+                'content': ''  # Empty assistant message
+            },
+            {
+                'uuid': 'asst-2',
+                'parent_uuid': 'asst-1',
+                'message_type': 'assistant',
+                'content': 'I\'ll search for the conversations from yesterday.'
+            },
+            {
+                'uuid': 'skill-loading',
+                'parent_uuid': 'asst-2',
+                'message_type': 'assistant',
+                'content': 'The "conversation-search" skill is loading'
+            },
+            {
+                'uuid': 'asst-3',
+                'parent_uuid': 'skill-loading',
+                'message_type': 'assistant',
+                'content': 'I\'ll help you find yesterday\'s conversations.'
+            },
+            {
+                'uuid': 'search-msg',
+                'parent_uuid': 'asst-3',
+                'message_type': 'assistant',
+                'content': '[Tool: Bash]\ncc-conversation-search list --date yesterday --json'
+            },
+        ]
+
+        indexer = ConversationIndexer(db_path=":memory:")
+        meta_uuids = indexer._mark_meta_conversations(messages)
+
+        # Should mark ENTIRE chain from search message up to and including user root
+        expected = {'user-root', 'asst-1', 'asst-2', 'skill-loading', 'asst-3', 'search-msg'}
+        assert meta_uuids == expected
+
+        # Verify all messages are marked
+        for msg in messages:
+            assert msg.get('is_meta_conversation') is True
+
+    def test_multiple_searches_share_ancestry(self):
+        """Should handle multiple searches that trace back to same user message."""
+        messages = [
+            {
+                'uuid': 'user-root',
+                'parent_uuid': None,
+                'message_type': 'user',
+                'content': 'Find Redis conversations'
+            },
+            {
+                'uuid': 'asst-1',
+                'parent_uuid': 'user-root',
+                'message_type': 'assistant',
+                'content': 'Let me search...'
+            },
+            {
+                'uuid': 'search-1',
+                'parent_uuid': 'asst-1',
+                'message_type': 'assistant',
+                'content': 'cc-conversation-search search "redis"'
+            },
+            {
+                'uuid': 'result-1',
+                'parent_uuid': 'search-1',
+                'message_type': 'user',
+                'content': '[Tool result]'
+            },
+            {
+                'uuid': 'search-2',
+                'parent_uuid': 'result-1',
+                'message_type': 'assistant',
+                'content': 'uv tool upgrade cc-conversation-search'
+            },
+        ]
+
+        indexer = ConversationIndexer(db_path=":memory:")
+        meta_uuids = indexer._mark_meta_conversations(messages)
+
+        # Both searches should trace back to user-root and mark overlapping ancestors
+        expected = {'user-root', 'asst-1', 'search-1', 'result-1', 'search-2'}
+        assert meta_uuids == expected
+
+    def test_marks_search_results_descendants(self):
+        """Should walk down from search message to mark results, stopping at real user message."""
+        messages = [
+            {
+                'uuid': 'user-question',
+                'parent_uuid': None,
+                'message_type': 'user',
+                'content': 'What did I work on yesterday?'
+            },
+            {
+                'uuid': 'search-cmd',
+                'parent_uuid': 'user-question',
+                'message_type': 'assistant',
+                'content': 'cc-conversation-search list --date yesterday'
+            },
+            {
+                'uuid': 'tool-result',
+                'parent_uuid': 'search-cmd',
+                'message_type': 'user',
+                'content': '[Tool result]'
+            },
+            {
+                'uuid': 'processing',
+                'parent_uuid': 'tool-result',
+                'message_type': 'assistant',
+                'content': ''  # Empty processing message
+            },
+            {
+                'uuid': 'search-answer',
+                'parent_uuid': 'processing',
+                'message_type': 'assistant',
+                'content': 'Based on yesterday\'s conversations, you worked on: comfygit, redream...'
+            },
+            {
+                'uuid': 'real-followup',
+                'parent_uuid': 'search-answer',
+                'message_type': 'user',
+                'content': 'Great! Now help me with comfygit'
+            },
+            {
+                'uuid': 'real-work',
+                'parent_uuid': 'real-followup',
+                'message_type': 'assistant',
+                'content': 'Let me help with comfygit... [actual work]'
+            },
+        ]
+
+        indexer = ConversationIndexer(db_path=":memory:")
+        meta_uuids = indexer._mark_meta_conversations(messages)
+
+        # Should mark everything from user question through search results
+        # but STOP at the real follow-up question
+        expected = {'user-question', 'search-cmd', 'tool-result', 'processing', 'search-answer'}
+        assert meta_uuids == expected
+
+        # Real work should NOT be marked
+        assert 'real-followup' not in meta_uuids
+        assert 'real-work' not in meta_uuids
+
+    def test_marks_entire_conversation_if_only_meta(self):
+        """Should mark entire conversation if it's purely search with no follow-up work."""
+        messages = [
+            {
+                'uuid': 'user-q',
+                'parent_uuid': None,
+                'message_type': 'user',
+                'content': 'Summarize my projects from last week'
+            },
+            {
+                'uuid': 'search',
+                'parent_uuid': 'user-q',
+                'message_type': 'assistant',
+                'content': 'cc-conversation-search list --date last-week'
+            },
+            {
+                'uuid': 'result',
+                'parent_uuid': 'search',
+                'message_type': 'user',
+                'content': '[Tool result]'
+            },
+            {
+                'uuid': 'answer',
+                'parent_uuid': 'result',
+                'message_type': 'assistant',
+                'content': 'Last week you worked on: project A, project B, project C...'
+            },
+        ]
+
+        indexer = ConversationIndexer(db_path=":memory:")
+        meta_uuids = indexer._mark_meta_conversations(messages)
+
+        # Entire conversation should be marked
+        expected = {'user-q', 'search', 'result', 'answer'}
+        assert meta_uuids == expected
+
+        # Verify all messages marked
+        for msg in messages:
+            assert msg.get('is_meta_conversation') is True
+
+    def test_downward_walk_stops_at_conversation_end(self):
+        """Should handle case where conversation ends after search results."""
+        messages = [
+            {
+                'uuid': 'user-q',
+                'parent_uuid': None,
+                'message_type': 'user',
+                'content': 'Find Redis conversations'
+            },
+            {
+                'uuid': 'search',
+                'parent_uuid': 'user-q',
+                'message_type': 'assistant',
+                'content': 'cc-conversation-search search "redis"'
+            },
+            {
+                'uuid': 'result',
+                'parent_uuid': 'search',
+                'message_type': 'user',
+                'content': '[Tool result]'
+            },
+        ]
+
+        indexer = ConversationIndexer(db_path=":memory:")
+        meta_uuids = indexer._mark_meta_conversations(messages)
+
+        # Should mark all messages
+        expected = {'user-q', 'search', 'result'}
+        assert meta_uuids == expected
 
 
 class TestIntegrationWithIndexer:
