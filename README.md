@@ -20,7 +20,11 @@ Find and resume past Claude Code conversations using smart hybrid extraction and
 Install the complete plugin (skill + CLI tool instructions) directly in Claude Code:
 
 ```bash
-/plugin install akatz-ai/cc-conversation-search
+# Add plugin to marketplace
+/plugin marketplace add akatz-ai/cc-conversation-search
+
+# Install the plugin
+/plugin install conversation-search
 ```
 
 Then follow the installation instructions shown by Claude to:

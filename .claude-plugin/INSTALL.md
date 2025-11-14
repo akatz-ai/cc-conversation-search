@@ -4,7 +4,9 @@ Thank you for installing the **conversation-search** plugin!
 
 ## Step 1: Install the CLI Tool
 
-The skill requires the `conversation-search` command-line tool to be installed:
+The skill requires the `conversation-search` CLI tool.
+
+**Note**: The package name is `cc-conversation-search` but the command is `conversation-search`.
 
 ### Recommended: Using uv
 ```bash

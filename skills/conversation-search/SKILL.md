@@ -10,62 +10,63 @@ Find past conversations in your Claude Code history and get the commands to resu
 
 ## Prerequisites & Auto-Installation
 
-The skill requires the `conversation-search` CLI tool. Check and install automatically:
+The skill requires the `conversation-search` CLI tool (v0.4.0+ minimum).
+
+**IMPORTANT: Always upgrade to latest when skill activates**
 
 ```bash
 # Check if installed
-which conversation-search
-```
-
-**If exit code is non-zero (not installed):**
-
-### Try Automatic Installation
-
-**Option 1: Using uv (preferred)**
-```bash
-# Check if uv is available
-if command -v uv &> /dev/null; then
-    echo "Installing conversation-search via uv..."
-    uv tool install conversation-search
-    conversation-search init --days 7
+if command -v conversation-search &> /dev/null; then
+    # Already installed - upgrade to latest to match plugin version
+    uv tool upgrade cc-conversation-search 2>/dev/null || pip install --upgrade cc-conversation-search
+    echo "Upgraded to: $(conversation-search --version)"
 else
-    echo "uv not found, trying pip..."
+    echo "Not installed - installing now..."
 fi
 ```
 
-**Option 2: Using pip (fallback)**
+**If not installed:**
+
+### Automatic Installation
+
 ```bash
-if ! command -v conversation-search &> /dev/null; then
-    echo "Installing conversation-search via pip..."
-    pip install --user conversation-search
-    # Add ~/.local/bin to PATH if needed
+# Try uv first (preferred), fallback to pip
+if command -v uv &> /dev/null; then
+    uv tool install cc-conversation-search
+else
+    pip install --user cc-conversation-search
     export PATH="$HOME/.local/bin:$PATH"
-    conversation-search init --days 7
 fi
+
+# Initialize database
+conversation-search init --days 7
 ```
 
-**Option 3: Manual (if both fail)**
-
-If automated installation fails, guide the user:
+**If installation fails**, guide the user:
 ```
-The conversation-search tool is not installed. Please install it:
+The conversation-search plugin requires the cc-conversation-search CLI tool.
 
-Using uv (recommended):
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  uv tool install conversation-search
-  conversation-search init
+Install it manually:
+  uv tool install cc-conversation-search  (recommended)
+  OR
+  pip install --user cc-conversation-search
 
-Using pip:
-  pip install --user conversation-search
+Then initialize:
   conversation-search init
 ```
 
 **After installation, verify:**
 ```bash
-which conversation-search && conversation-search --version
+conversation-search --version  # Should show 0.4.0 or higher
 ```
 
 **Do not attempt search** until installation is confirmed.
+
+### Version Compatibility Note
+
+Minimum CLI version: 0.4.0 (required for --version, --quiet, proper error messages).
+
+**Best practice**: This skill automatically upgrades the CLI tool on every activation to ensure compatibility with plugin updates.
 
 ## Progressive Search Workflow
 
@@ -85,10 +86,10 @@ Search Progress:
 
 **IMPORTANT**: Always run index before search to ensure fresh data:
 ```bash
-conversation-search index --days 7
+conversation-search index --days 7 --quiet
 ```
 
-This is now instant (no AI calls) and ensures you're searching the latest conversations.
+This is instant (no AI calls) and ensures you're searching the latest conversations. Use --quiet for minimal output.
 
 ### Level 1: Simple Search (Start Here)
 
@@ -169,9 +170,11 @@ conversation-search context <UUID> --json
 which conversation-search
 ```
 If not found:
-1. Install: `uv tool install conversation-search` or `pip install conversation-search`
+1. Install: `uv tool install cc-conversation-search` or `pip install cc-conversation-search`
 2. Initialize: `conversation-search init`
 3. **Do not proceed** until confirmed installed
+
+Note: The package is `cc-conversation-search` but the command is `conversation-search`
 
 **Database not found:**
 User must run: `conversation-search init`
@@ -223,7 +226,7 @@ User: "Find that conversation where we fixed the authentication bug"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `conversation-search index --days 7`
+1. Run Level 0 (JIT index): `conversation-search index --days 7 --quiet`
 2. Run Level 1: `conversation-search search "authentication bug" --days 14 --json`
 3. If no matches, Level 2: `conversation-search search "auth" --json`
 4. If still no matches, Level 3 (list + tree exploration)
@@ -235,7 +238,7 @@ User: "Did we ever discuss React hooks?"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `conversation-search index --days 7`
+1. Run Level 0 (JIT index): `conversation-search index --days 7 --quiet`
 2. Run Level 1: `conversation-search search "react hooks" --days 30 --json`
 3. Display all matches with session IDs and project paths
 4. Show resume commands for each match
@@ -246,7 +249,7 @@ User: "I want to go back to where we started implementing the API"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `conversation-search index --days 7`
+1. Run Level 0 (JIT index): `conversation-search index --days 7 --quiet`
 2. Search: `conversation-search search "implementing API" --json`
 3. Display session ID and project path prominently
 4. Show exact resume commands

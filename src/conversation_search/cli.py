@@ -9,72 +9,88 @@ from pathlib import Path
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch
 
+__version__ = "0.4.3"
+
 
 def cmd_init(args):
     """Initialize the database and run initial indexing"""
-    print("Conversation Search - Initializing")
-    print("=" * 50)
+    quiet = args.quiet
+
+    if not quiet:
+        print("Conversation Search - Initializing")
+        print("=" * 50)
 
     db_path = Path.home() / ".conversation-search" / "index.db"
 
     if db_path.exists() and not args.force:
-        print(f"✓ Database already exists: {db_path}")
-        print("  Use --force to reinitialize")
+        if not quiet:
+            print(f"✓ Database already exists: {db_path}")
+            print("  Use --force to reinitialize")
         return
 
-    # Create indexer (initializes DB)
-    print(f"Creating database: {db_path}")
+    if not quiet:
+        print(f"Creating database: {db_path}")
     indexer = ConversationIndexer(db_path=str(db_path))
 
-    # Index recent conversations
     days = args.days
-    print(f"\nIndexing conversations from last {days} days...")
+    if not quiet:
+        print(f"\nIndexing conversations from last {days} days...")
     files = indexer.scan_conversations(days_back=days)
 
     if not files:
-        print("  No conversations found")
+        if not quiet:
+            print("  No conversations found")
         indexer.close()
         return
 
-    print(f"  Found {len(files)} conversation files")
+    if not quiet:
+        print(f"  Found {len(files)} conversation files")
 
     for i, conv_file in enumerate(files, 1):
         try:
-            print(f"  [{i}/{len(files)}] {conv_file.name}", end="\r")
+            if not quiet:
+                print(f"  [{i}/{len(files)}] {conv_file.name}", end="\r")
             indexer.index_conversation(conv_file, summarize=not args.no_extract)
         except Exception as e:
             print(f"\n  Error indexing {conv_file.name}: {e}")
 
-    print(f"\n\n✓ Initialization complete!")
-    print(f"  Database: {db_path}")
-    print(f"\nNext steps:")
-    print(f"  • Search conversations: conversation-search search '<query>'")
-    print(f"  • List recent: conversation-search list")
-    print(f"  • Re-index: conversation-search index")
+    if quiet:
+        print(f"✓ Indexed {len(files)} conversations")
+    else:
+        print(f"\n\n✓ Initialization complete!")
+        print(f"  Database: {db_path}")
+        print(f"\nNext steps:")
+        print(f"  • Search conversations: conversation-search search '<query>'")
+        print(f"  • List recent: conversation-search list")
+        print(f"  • Re-index: conversation-search index")
 
     indexer.close()
 
 
 def cmd_index(args):
     """Index conversations (JIT - fast without AI calls)"""
+    quiet = args.quiet
     indexer = ConversationIndexer()
 
     files = indexer.scan_conversations(days_back=args.days if not args.all else None)
 
     if not files:
-        print("No conversations to index")
+        if not quiet:
+            print("No conversations to index")
         return
 
-    print(f"Indexing {len(files)} conversations...")
+    if not quiet:
+        print(f"Indexing {len(files)} conversations...")
 
     for i, conv_file in enumerate(files, 1):
         try:
-            print(f"[{i}/{len(files)}] {conv_file.name}", end="\r")
+            if not quiet:
+                print(f"[{i}/{len(files)}] {conv_file.name}", end="\r")
             indexer.index_conversation(conv_file, summarize=not args.no_extract)
         except Exception as e:
             print(f"\nError indexing {conv_file.name}: {e}")
 
-    print(f"\n✓ Indexed {len(files)} conversations")
+    print(f"✓ Indexed {len(files)} conversations")
     indexer.close()
 
 
@@ -266,6 +282,7 @@ def main():
         prog='conversation-search',
         description='Find and resume Claude Code conversations using semantic search'
     )
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
 
     subparsers = parser.add_subparsers(dest='command', help='Command to run')
 
@@ -274,6 +291,7 @@ def main():
     init_parser.add_argument('--days', type=int, default=7, help='Days of history to index (default: 7)')
     init_parser.add_argument('--no-extract', action='store_true', help='Skip smart extraction (store only raw content)')
     init_parser.add_argument('--force', action='store_true', help='Reinitialize existing database')
+    init_parser.add_argument('--quiet', action='store_true', help='Minimal output')
     init_parser.set_defaults(func=cmd_init)
 
     # index command
@@ -281,6 +299,7 @@ def main():
     index_parser.add_argument('--days', type=int, default=1, help='Days back to index (default: 1)')
     index_parser.add_argument('--all', action='store_true', help='Index all conversations')
     index_parser.add_argument('--no-extract', action='store_true', help='Skip smart extraction')
+    index_parser.add_argument('--quiet', action='store_true', help='Minimal output')
     index_parser.set_defaults(func=cmd_index)
 
     # search command
@@ -329,7 +348,9 @@ def main():
         args.func(args)
     except FileNotFoundError as e:
         print(f"Error: {e}")
-        print("\nRun 'conversation-search init' to initialize the database")
+        print("\nThe conversation-search tool requires initialization.")
+        print("Install: uv tool install cc-conversation-search")
+        print("Initialize: conversation-search init")
         sys.exit(1)
     except KeyboardInterrupt:
         print("\n\nInterrupted")

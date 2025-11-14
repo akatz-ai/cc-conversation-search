@@ -9,7 +9,11 @@ This plugin provides semantic search across your Claude Code conversation histor
 Users can install directly from your GitHub repository:
 
 ```bash
-/plugin install akatz-ai/conversation-search
+# Add plugin to marketplace
+/plugin marketplace add akatz-ai/cc-conversation-search
+
+# Install the plugin
+/plugin install conversation-search
 ```
 
 This will:
@@ -21,9 +25,9 @@ This will:
 1. Clone the repository
 2. Install the CLI tool:
    ```bash
-   uv tool install conversation-search
+   uv tool install cc-conversation-search
    # OR
-   pip install conversation-search
+   pip install cc-conversation-search
    ```
 3. Initialize the database:
    ```bash
