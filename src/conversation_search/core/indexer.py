@@ -16,10 +16,11 @@ from conversation_search.core.summarization import MessageSummarizer, is_summari
 
 
 class ConversationIndexer:
-    def __init__(self, db_path: str = "~/.conversation-search/index.db"):
+    def __init__(self, db_path: str = "~/.conversation-search/index.db", quiet: bool = False):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        self.quiet = quiet
 
         # Enable WAL mode for concurrent access
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -56,7 +57,8 @@ class ConversationIndexer:
                     _, messages = self.parse_conversation_file(conv_file)
                     if is_summarizer_conversation(conv_file, messages):
                         self._summarizer_project_hash = project_dir.name
-                        print(f"  Detected summarizer project hash: {project_dir.name}")
+                        if not self.quiet:
+                            print(f"  Detected summarizer project hash: {project_dir.name}")
                         return project_dir.name
                 except:
                     continue
@@ -75,7 +77,8 @@ class ConversationIndexer:
         """
         projects_dir = Path.home() / ".claude" / "projects"
         if not projects_dir.exists():
-            print(f"Projects directory not found: {projects_dir}")
+            if not self.quiet:
+                print(f"Projects directory not found: {projects_dir}")
             return []
 
         cutoff_time = None
@@ -165,7 +168,8 @@ class ConversationIndexer:
                         })
 
                 except json.JSONDecodeError as e:
-                    print(f"Error parsing line {line_num} in {file_path}: {e}")
+                    if not self.quiet:
+                        print(f"Error parsing line {line_num} in {file_path}: {e}")
                     continue
 
         return conversation_meta, messages
@@ -192,18 +196,21 @@ class ConversationIndexer:
 
     def index_conversation(self, file_path: Path, summarize: bool = True):
         """Index a single conversation file with batch summarization"""
-        print(f"Indexing: {file_path}")
+        if not self.quiet:
+            print(f"Indexing: {file_path}")
 
         # Parse file
         conv_meta, messages = self.parse_conversation_file(file_path)
 
         if not messages:
-            print(f"  No messages found in {file_path}")
+            if not self.quiet:
+                print(f"  No messages found in {file_path}")
             return
 
         # Skip summarizer conversations
         if is_summarizer_conversation(file_path, messages):
-            print(f"  ⏭️  Skipping automated summarizer conversation")
+            if not self.quiet:
+                print(f"  ⏭️  Skipping automated summarizer conversation")
             return
 
         # Extract project path from file location
@@ -212,7 +219,8 @@ class ConversationIndexer:
         # Get session ID from first message
         session_id = messages[0].get('session_id')
         if not session_id:
-            print(f"  No session_id found in {file_path}")
+            if not self.quiet:
+                print(f"  No session_id found in {file_path}")
             return
 
         # Calculate depths
@@ -231,7 +239,8 @@ class ConversationIndexer:
 
         is_update = False
         if existing:
-            print(f"  Already indexed at {existing['indexed_at']}, checking for new messages...")
+            if not self.quiet:
+                print(f"  Already indexed at {existing['indexed_at']}, checking for new messages...")
 
             # Get existing message UUIDs
             cursor.execute(
@@ -244,10 +253,12 @@ class ConversationIndexer:
             new_messages = [m for m in messages if m['uuid'] not in existing_uuids]
 
             if not new_messages:
-                print(f"  No new messages, skipping")
+                if not self.quiet:
+                    print(f"  No new messages, skipping")
                 return
 
-            print(f"  Found {len(new_messages)} new messages (total: {len(messages)})")
+            if not self.quiet:
+                print(f"  Found {len(new_messages)} new messages (total: {len(messages)})")
 
             # Save reference to all messages for metadata update
             all_messages = messages
@@ -349,48 +360,57 @@ class ConversationIndexer:
             # Commit once at the end
             self.conn.commit()
 
-            if tool_noise_uuids:
+            if tool_noise_uuids and not self.quiet:
                 print(f"  Marked {len(tool_noise_uuids)} messages as tool noise")
 
         except sqlite3.Error as e:
             self.conn.rollback()
-            print(f"  Error during indexing, rolled back: {e}")
+            if not self.quiet:
+                print(f"  Error during indexing, rolled back: {e}")
             raise
 
         # Smart extraction (instant, no API calls)
         if summarize and needs_extraction:
-            print(f"  Extracting searchable text from {len(needs_extraction)} messages...")
+            if not self.quiet:
+                print(f"  Extracting searchable text from {len(needs_extraction)} messages...")
 
             # Extract in single batch (no API, instant)
             extractions = self.summarizer.extract_batch(needs_extraction)
             if extractions:
                 updated = self.summarizer.update_database(extractions, method='smart_extraction')
-                print(f"  ✓ Extracted {updated}/{len(needs_extraction)} summaries")
+                if not self.quiet:
+                    print(f"  ✓ Extracted {updated}/{len(needs_extraction)} summaries")
 
+            if not self.quiet:
+                if is_update:
+                    print(f"  ✓ Added {len(messages)} new messages with smart extraction")
+                else:
+                    print(f"  ✓ Indexed {len(messages)} messages with smart extraction")
+        elif not self.quiet:
             if is_update:
-                print(f"  ✓ Added {len(messages)} new messages with smart extraction")
+                print(f"  ✓ Added {len(messages)} new messages (no extraction)")
             else:
-                print(f"  ✓ Indexed {len(messages)} messages with smart extraction")
-        elif is_update:
-            print(f"  ✓ Added {len(messages)} new messages (no extraction)")
-        else:
-            print(f"  ✓ Indexed {len(messages)} messages (no extraction)")
+                print(f"  ✓ Indexed {len(messages)} messages (no extraction)")
 
     def index_all(self, days_back: Optional[int] = 1, summarize: bool = True):
         """Index all conversations from the last N days"""
         files = self.scan_conversations(days_back)
-        print(f"Found {len(files)} conversation files to index")
+        if not self.quiet:
+            print(f"Found {len(files)} conversation files to index")
 
         for i, file_path in enumerate(files, 1):
-            print(f"\n[{i}/{len(files)}]")
+            if not self.quiet:
+                print(f"\n[{i}/{len(files)}]")
             try:
                 self.index_conversation(file_path, summarize=summarize)
             except Exception as e:
-                print(f"  Error indexing {file_path}: {e}")
-                import traceback
-                traceback.print_exc()
+                if not self.quiet:
+                    print(f"  Error indexing {file_path}: {e}")
+                    import traceback
+                    traceback.print_exc()
 
-        print(f"\n✓ Indexing complete!")
+        if not self.quiet:
+            print(f"\n✓ Indexing complete!")
 
     def close(self):
         """Close database connection"""

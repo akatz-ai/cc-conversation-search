@@ -30,7 +30,7 @@ def cmd_init(args):
 
     if not quiet:
         print(f"Creating database: {db_path}")
-    indexer = ConversationIndexer(db_path=str(db_path))
+    indexer = ConversationIndexer(db_path=str(db_path), quiet=quiet)
 
     days = args.days
     if not quiet:
@@ -70,7 +70,7 @@ def cmd_init(args):
 def cmd_index(args):
     """Index conversations (JIT - fast without AI calls)"""
     quiet = args.quiet
-    indexer = ConversationIndexer()
+    indexer = ConversationIndexer(quiet=quiet)
 
     files = indexer.scan_conversations(days_back=args.days if not args.all else None)
 
@@ -88,9 +88,11 @@ def cmd_index(args):
                 print(f"[{i}/{len(files)}] {conv_file.name}", end="\r")
             indexer.index_conversation(conv_file, summarize=not args.no_extract)
         except Exception as e:
-            print(f"\nError indexing {conv_file.name}: {e}")
+            if not quiet:
+                print(f"\nError indexing {conv_file.name}: {e}")
 
-    print(f"✓ Indexed {len(files)} conversations")
+    if not quiet:
+        print(f"✓ Indexed {len(files)} conversations")
     indexer.close()
 
 
