@@ -133,25 +133,21 @@ Only escalate here if Levels 1-2 failed:
 
 **If found:**
 
-Display session resumption information in this order:
+Display session resumption information using this markdown format:
 
+**Session Details**
+
+- **Session**: abc-123-session-id
+- **Project**: /home/user/projects/myproject
+- **Time**: 2025-11-13 22:50
+- **Message**: def-456-message-uuid
+
+**To Resume This Conversation**
+
+```bash
+cd /home/user/projects/myproject
+claude --resume abc-123-session-id
 ```
-Session: abc-123-session-id
-Project: /home/user/projects/myproject
-Time: 2025-11-13 22:50
-Message: def-456-message-uuid
-
-To resume:
-  cd /home/user/projects/myproject
-  claude --resume abc-123-session-id
-```
-
-Include:
-- **Session ID** (required for resumption)
-- **Project path** (cd there first)
-- **Timestamp** (verify it's the right one)
-- **Message UUID** (for context retrieval if needed)
-- **Copy-pasteable commands** (cd + claude --resume)
 
 Optionally offer context expansion:
 ```bash

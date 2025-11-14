@@ -9,7 +9,7 @@ from pathlib import Path
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 
 def cmd_init(args):
