@@ -246,7 +246,7 @@ def message_uses_conversation_search(message: Dict) -> bool:
     Detect if a message involves using the conversation-search tool.
 
     Returns True if this is a Claude message that used the search tool.
-    This helps identify meta-conversations that should be filtered out.
+    This helps identify meta-conversations that should be marked.
 
     Args:
         message: Message dict with 'message_type' and 'content'
@@ -267,30 +267,49 @@ def message_uses_conversation_search(message: Dict) -> bool:
         return True
 
     # Pattern 2: Direct cc-conversation-search command usage
-    # Look for command patterns like "cc-conversation-search search" or "cc-conversation-search list"
+    # Multiple patterns to catch various invocation styles
     if 'cc-conversation-search' in content:
-        # Check if it looks like a command (has subcommands after it)
-        # Match patterns like: cc-conversation-search <subcommand>
-        cmd_pattern = r'cc-conversation-search\s+(search|list|index|tree|context|resume)'
-        if re.search(cmd_pattern, content):
-            return True
+        cmd_patterns = [
+            # Direct subcommand: cc-conversation-search search
+            r'cc-conversation-search\s+(search|list|index|tree|context|resume)',
+            # Flags before subcommand: cc-conversation-search --json search
+            r'cc-conversation-search\s+--\w+\s+(search|list|index|tree|context|resume)',
+            # Version/help flags: cc-conversation-search --help
+            r'cc-conversation-search\s+(--help|--version|-h|-v)',
+        ]
+        for pattern in cmd_patterns:
+            if re.search(pattern, content):
+                return True
 
-    # Pattern 3: Skill activation markers (actual usage, not discussion)
-    if 'conversation-search skill is loading' in content_lower:
+    # Pattern 3: Tool upgrade commands
+    if re.search(r'uv\s+tool\s+upgrade\s+cc-conversation-search', content):
+        return True
+    if re.search(r'pip\s+install\s+--upgrade\s+cc-conversation-search', content):
         return True
 
+    # Pattern 4: Command existence checks
+    if re.search(r'command\s+-v\s+cc-conversation-search', content):
+        return True
+    if re.search(r'which\s+cc-conversation-search', content):
+        return True
+
+    # Pattern 5: Skill activation markers (actual usage, not discussion)
+    if 'conversation-search skill is loading' in content_lower:
+        return True
     if 'conversation-search skill is running' in content_lower:
         return True
 
-    # Pattern 4: The quoted skill name with "is loading" or similar
-    # Check for patterns like: The "conversation-search" skill is loading
-    if '"conversation-search"' in content_lower and 'skill' in content_lower:
-        return True
+    # Pattern 6: The quoted skill name with activation verbs (more specific than before)
+    if '"conversation-search"' in content_lower:
+        activation_verbs = ['loading', 'running', 'is active', 'activated']
+        if any(verb in content_lower for verb in activation_verbs):
+            return True
 
-    # Pattern 5: Skill allowed tools marker
+    # Pattern 7: Skill allowed tools marker (with proximity check)
     if 'allowed 1 tools for this command' in content_lower:
-        # Check if conversation-search is mentioned nearby
-        if 'conversation-search' in content_lower:
+        marker_pos = content_lower.find('allowed 1 tools')
+        search_pos = content_lower.find('conversation-search')
+        if search_pos != -1 and abs(marker_pos - search_pos) < 100:
             return True
 
     return False

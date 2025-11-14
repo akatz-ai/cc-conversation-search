@@ -107,7 +107,7 @@ class ConversationSearch:
                     c.conversation_file
                 FROM messages m
                 JOIN conversations c ON m.session_id = c.session_id
-                WHERE 1=1
+                WHERE m.is_meta_conversation = FALSE
             """
             params = []
         else:
@@ -139,6 +139,7 @@ class ConversationSearch:
                     SELECT message_uuid FROM message_summaries_fts
                     WHERE summary MATCH ?
                 )
+                AND m.is_meta_conversation = FALSE
             """
             params = [fts_query]
 
@@ -453,7 +454,7 @@ class ConversationSearch:
                 SELECT message_uuid, timestamp, message_type, summary,
                        is_sidechain, project_path, is_tool_noise
                 FROM messages
-                WHERE session_id = ? AND is_tool_noise = FALSE
+                WHERE session_id = ? AND is_tool_noise = FALSE AND is_meta_conversation = FALSE
                 ORDER BY timestamp DESC
                 LIMIT ?
             """, (conv['session_id'], max_messages_per_conv))
@@ -594,7 +595,7 @@ def main():
 
             # Step 1: Mark tool noise
             print("\n1️⃣ Marking tool noise messages...")
-            cursor.execute("SELECT message_uuid, message_type, full_content as content FROM messages WHERE is_tool_noise = FALSE")
+            cursor.execute("SELECT message_uuid, message_type, full_content as content FROM messages WHERE is_tool_noise = FALSE AND is_meta_conversation = FALSE")
             messages = [dict(row) for row in cursor.fetchall()]
 
             tool_noise_uuids = []
@@ -753,7 +754,7 @@ def main():
                 sql = """
                     SELECT message_uuid as uuid, message_type, full_content as content
                     FROM messages
-                    WHERE is_summarized = FALSE AND is_tool_noise = FALSE
+                    WHERE is_summarized = FALSE AND is_tool_noise = FALSE AND is_meta_conversation = FALSE
                 """
 
             if args.days:

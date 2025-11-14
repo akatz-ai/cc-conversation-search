@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS messages (
     -- Summarization tracking
     is_summarized BOOLEAN DEFAULT FALSE,
     is_tool_noise BOOLEAN DEFAULT FALSE,
+    is_meta_conversation BOOLEAN DEFAULT FALSE,
     summary_method TEXT CHECK(summary_method IN ('truncation', 'ai_generated', 'too_short', NULL)),
 
     -- Indexing
@@ -43,6 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_project_path ON messages(project_path);
 CREATE INDEX IF NOT EXISTS idx_is_summarized ON messages(is_summarized);
 CREATE INDEX IF NOT EXISTS idx_is_tool_noise ON messages(is_tool_noise);
+CREATE INDEX IF NOT EXISTS idx_is_meta_conversation ON messages(is_meta_conversation);
 
 -- Full-text search on summaries (lightweight)
 CREATE VIRTUAL TABLE IF NOT EXISTS message_summaries_fts USING fts5(

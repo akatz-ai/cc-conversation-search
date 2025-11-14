@@ -37,6 +37,7 @@ class TestSearchWithDateFilters:
                 full_content TEXT NOT NULL,
                 is_summarized BOOLEAN DEFAULT FALSE,
                 is_tool_noise BOOLEAN DEFAULT FALSE,
+                is_meta_conversation BOOLEAN DEFAULT FALSE,
                 summary_method TEXT,
                 indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -266,6 +267,7 @@ class TestListWithDateFilters:
                 full_content TEXT NOT NULL,
                 is_summarized BOOLEAN DEFAULT FALSE,
                 is_tool_noise BOOLEAN DEFAULT FALSE,
+                is_meta_conversation BOOLEAN DEFAULT FALSE,
                 summary_method TEXT,
                 indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
             );

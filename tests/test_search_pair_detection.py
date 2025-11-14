@@ -80,12 +80,111 @@ class TestMessageUsesConversationSearch:
         }
         assert message_uses_conversation_search(message) is True
 
+    def test_detects_flags_before_subcommand(self):
+        """Should detect cc-conversation-search with flags before subcommand."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': '[Tool: Bash]\ncc-conversation-search --json search "foo"\n...'
+        }
+        assert message_uses_conversation_search(message) is True
 
-class TestFindSearchPairs:
-    """Test finding user-Claude pairs where Claude used conversation-search."""
+    def test_detects_help_flag(self):
+        """Should detect cc-conversation-search --help."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': '[Tool: Bash]\ncc-conversation-search --help\n...'
+        }
+        assert message_uses_conversation_search(message) is True
 
-    def test_finds_simple_pair(self):
-        """Should find a simple user request + Claude search response pair."""
+    def test_detects_version_flag(self):
+        """Should detect cc-conversation-search --version."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'cc-conversation-search -v'
+        }
+        assert message_uses_conversation_search(message) is True
+
+    def test_detects_uv_tool_upgrade(self):
+        """Should detect uv tool upgrade cc-conversation-search."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': '[Tool: Bash]\nuv tool upgrade cc-conversation-search\n...'
+        }
+        assert message_uses_conversation_search(message) is True
+
+    def test_detects_pip_upgrade(self):
+        """Should detect pip install --upgrade cc-conversation-search."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'pip install --upgrade cc-conversation-search'
+        }
+        assert message_uses_conversation_search(message) is True
+
+    def test_detects_command_existence_check(self):
+        """Should detect command -v cc-conversation-search."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'if command -v cc-conversation-search &> /dev/null; then\n    echo "found"\nfi'
+        }
+        assert message_uses_conversation_search(message) is True
+
+    def test_detects_which_command(self):
+        """Should detect which cc-conversation-search."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'which cc-conversation-search'
+        }
+        assert message_uses_conversation_search(message) is True
+
+    def test_skill_activation_with_specific_verbs(self):
+        """Should detect quoted skill name with activation verbs."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'The "conversation-search" skill is now activated and running'
+        }
+        assert message_uses_conversation_search(message) is True
+
+    def test_ignores_skill_discussion_without_activation(self):
+        """Should NOT detect when discussing skill without activation verbs."""
+        message = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'The "conversation-search" skill can help you find conversations'
+        }
+        assert message_uses_conversation_search(message) is False
+
+    def test_proximity_check_for_allowed_tools(self):
+        """Should check proximity of conversation-search to allowed tools marker."""
+        # Should detect when close together
+        message_close = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'Allowed 1 tools for this command\nconversation-search'
+        }
+        assert message_uses_conversation_search(message_close) is True
+
+        # Should NOT detect when far apart (>100 chars)
+        message_far = {
+            'uuid': 'test-uuid',
+            'message_type': 'assistant',
+            'content': 'Allowed 1 tools for this command\n' + ('x' * 150) + 'conversation-search'
+        }
+        assert message_uses_conversation_search(message_far) is False
+
+
+class TestMarkMetaConversations:
+    """Test marking user-Claude pairs where Claude used conversation-search."""
+
+    def test_marks_simple_pair(self):
+        """Should mark a simple user request + Claude search response pair."""
         messages = [
             {
                 'uuid': 'msg-a',
@@ -102,12 +201,14 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
-        assert skip_uuids == {'msg-a', 'msg-b'}
+        assert meta_uuids == {'msg-a', 'msg-b'}
+        assert messages[0].get('is_meta_conversation') is True
+        assert messages[1].get('is_meta_conversation') is True
 
     def test_preserves_work_after_search(self):
-        """Should only skip the search pair, not subsequent work."""
+        """Should only mark the search pair, not subsequent work."""
         messages = [
             {
                 'uuid': 'msg-a',
@@ -136,13 +237,17 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
-        # Only skip the search pair
-        assert skip_uuids == {'msg-a', 'msg-b'}
-        # These should be indexed
-        assert 'msg-c' not in skip_uuids
-        assert 'msg-d' not in skip_uuids
+        # Only mark the search pair
+        assert meta_uuids == {'msg-a', 'msg-b'}
+        assert messages[0].get('is_meta_conversation') is True
+        assert messages[1].get('is_meta_conversation') is True
+        # These should NOT be marked
+        assert 'msg-c' not in meta_uuids
+        assert 'msg-d' not in meta_uuids
+        assert messages[2].get('is_meta_conversation') is not True
+        assert messages[3].get('is_meta_conversation') is not True
 
     def test_handles_multiple_search_pairs(self):
         """Should find multiple search pairs in one conversation."""
@@ -186,13 +291,13 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
         # Should skip both pairs
-        assert skip_uuids == {'msg-a', 'msg-b', 'msg-c', 'msg-d'}
+        assert meta_uuids == {'msg-a', 'msg-b', 'msg-c', 'msg-d'}
         # Real work preserved
-        assert 'msg-e' not in skip_uuids
-        assert 'msg-f' not in skip_uuids
+        assert 'msg-e' not in meta_uuids
+        assert 'msg-f' not in meta_uuids
 
     def test_handles_branching_sidechain(self):
         """Should handle conversation branches (sidechains) correctly."""
@@ -242,24 +347,24 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
         # Only skip the sidechain search pair
-        assert skip_uuids == {'msg-c', 'msg-d'}
+        assert meta_uuids == {'msg-c', 'msg-d'}
         # Main chain preserved
-        assert 'msg-a' not in skip_uuids
-        assert 'msg-b' not in skip_uuids
-        assert 'msg-e' not in skip_uuids
-        assert 'msg-f' not in skip_uuids
+        assert 'msg-a' not in meta_uuids
+        assert 'msg-b' not in meta_uuids
+        assert 'msg-e' not in meta_uuids
+        assert 'msg-f' not in meta_uuids
 
     def test_empty_messages_list(self):
         """Should handle empty message list gracefully."""
         messages = []
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
-        assert skip_uuids == set()
+        assert meta_uuids == set()
 
     def test_no_search_messages(self):
         """Should return empty set when no search tool usage found."""
@@ -279,9 +384,9 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
-        assert skip_uuids == set()
+        assert meta_uuids == set()
 
     def test_orphaned_search_response(self):
         """Should handle search response with no parent gracefully."""
@@ -295,10 +400,10 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
-        # Should still skip the search response even without parent
-        assert 'msg-a' in skip_uuids
+        # Should still mark the search response even without parent
+        assert 'msg-a' in meta_uuids
 
     def test_search_response_with_assistant_parent(self):
         """Should not add parent if parent is not a user message."""
@@ -318,11 +423,11 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
         # Should skip search response but not assistant parent
-        assert skip_uuids == {'msg-b'}
-        assert 'msg-a' not in skip_uuids
+        assert meta_uuids == {'msg-b'}
+        assert 'msg-a' not in meta_uuids
 
     def test_skill_activation_markers(self):
         """Should detect pairs using skill activation markers."""
@@ -342,9 +447,9 @@ class TestFindSearchPairs:
         ]
 
         indexer = ConversationIndexer(db_path=":memory:")
-        skip_uuids = indexer._find_search_pairs(messages)
+        meta_uuids = indexer._mark_meta_conversations(messages)
 
-        assert skip_uuids == {'msg-a', 'msg-b'}
+        assert meta_uuids == {'msg-a', 'msg-b'}
 
 
 class TestIntegrationWithIndexer:

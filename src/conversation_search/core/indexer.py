@@ -37,9 +37,20 @@ class ConversationIndexer:
         self._summarizer_project_hash = None
 
     def _init_db(self):
-        """Initialize database with schema"""
+        """Initialize database with schema and run migrations"""
         schema_sql = files('conversation_search.data').joinpath('schema.sql').read_text()
         self.conn.executescript(schema_sql)
+
+        # Migration: Add is_meta_conversation if missing (for existing databases)
+        try:
+            self.conn.execute("""
+                ALTER TABLE messages ADD COLUMN is_meta_conversation BOOLEAN DEFAULT FALSE
+            """)
+            if not self.quiet:
+                print("  Migrated database: added is_meta_conversation column")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         self.conn.commit()
 
     def _get_summarizer_project_hash(self) -> Optional[str]:
@@ -202,23 +213,23 @@ class ConversationIndexer:
 
         return depths
 
-    def _find_search_pairs(self, messages: List[Dict]) -> set:
+    def _mark_meta_conversations(self, messages: List[Dict]) -> set:
         """
-        Find user-request + claude-search pairs to skip during indexing.
+        Find and mark user-request + claude-search pairs as meta-conversations.
 
         This identifies message pairs where:
         1. User asks to find a conversation
         2. Claude responds by using cc-conversation-search
 
-        These pairs are "meta-conversations" that pollute search results.
+        These pairs are "meta-conversations" that should be marked to exclude from search.
 
         Args:
             messages: List of message dicts with uuid, parent_uuid, message_type, content
 
         Returns:
-            Set of message UUIDs to skip during indexing
+            Set of message UUIDs that are meta-conversations
         """
-        skip_uuids = set()
+        meta_uuids = set()
 
         # Build UUID -> message map for fast lookup
         msg_map = {m['uuid']: m for m in messages}
@@ -228,18 +239,20 @@ class ConversationIndexer:
             if not message_uses_conversation_search(message):
                 continue
 
-            # Found a search message - add it to skip list
-            skip_uuids.add(message['uuid'])
+            # Found a search message - mark it as meta-conversation
+            meta_uuids.add(message['uuid'])
+            message['is_meta_conversation'] = True
 
-            # Add its parent (the user's search request)
+            # Mark its parent (the user's search request)
             parent_uuid = message.get('parent_uuid')
             if parent_uuid and parent_uuid in msg_map:
                 # Verify parent is a user message (sanity check)
                 parent = msg_map[parent_uuid]
                 if parent.get('message_type') == 'user':
-                    skip_uuids.add(parent_uuid)
+                    meta_uuids.add(parent_uuid)
+                    parent['is_meta_conversation'] = True
 
-        return skip_uuids
+        return meta_uuids
 
     def index_conversation(self, file_path: Path, summarize: bool = True):
         """Index a single conversation file with batch summarization"""
@@ -260,19 +273,11 @@ class ConversationIndexer:
                 print(f"  ⏭️  Skipping automated summarizer conversation")
             return
 
-        # Detect and filter search pairs to prevent meta-conversation pollution
-        skip_uuids = self._find_search_pairs(messages)
-        if skip_uuids:
-            if not self.quiet:
-                pair_count = len(skip_uuids) // 2  # Approximate number of pairs
-                print(f"  ⏭️  Skipping {len(skip_uuids)} meta-search messages (~{pair_count} pairs)")
-            # Filter out the search pairs
-            messages = [m for m in messages if m['uuid'] not in skip_uuids]
-
-        if not messages:
-            if not self.quiet:
-                print(f"  No messages to index after filtering")
-            return
+        # Mark meta-conversations (search pairs)
+        meta_uuids = self._mark_meta_conversations(messages)
+        if meta_uuids and not self.quiet:
+            pair_count = len(meta_uuids) // 2  # Approximate number of pairs
+            print(f"  🏷️  Marking {len(meta_uuids)} meta-search messages (~{pair_count} pairs)")
 
         # Extract project path from file location
         project_path = file_path.parent.name.replace('-', '/')
@@ -384,8 +389,8 @@ class ConversationIndexer:
                     INSERT INTO messages (
                         message_uuid, session_id, parent_uuid, is_sidechain,
                         depth, timestamp, message_type, project_path,
-                        conversation_file, summary, full_content
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        conversation_file, summary, full_content, is_meta_conversation
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     message['uuid'],
                     session_id,
@@ -397,7 +402,8 @@ class ConversationIndexer:
                     project_path,
                     str(file_path),
                     message['content'][:150] if len(message['content']) < 150 else message['content'][:147] + "...",
-                    message['content']
+                    message['content'],
+                    message.get('is_meta_conversation', False)
                 ))
 
             # Mark tool noise in same transaction
