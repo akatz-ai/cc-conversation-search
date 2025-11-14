@@ -14,6 +14,33 @@ from datetime import datetime, timedelta
 from conversation_search.core.summarization import MessageSummarizer
 
 
+def format_timestamp(iso_timestamp: str, include_date: bool = True, include_seconds: bool = False) -> str:
+    """
+    Convert UTC ISO timestamp to local time for display.
+
+    Args:
+        iso_timestamp: ISO format timestamp with Z suffix (UTC)
+        include_date: Include date in output (default: True)
+        include_seconds: Include seconds in time (default: False)
+
+    Returns:
+        Formatted timestamp in local timezone
+    """
+    dt_utc = datetime.fromisoformat(iso_timestamp.replace('Z', '+00:00'))
+    dt_local = dt_utc.astimezone()
+
+    if include_date:
+        if include_seconds:
+            return dt_local.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            return dt_local.strftime('%Y-%m-%d %H:%M')
+    else:
+        if include_seconds:
+            return dt_local.strftime('%H:%M:%S')
+        else:
+            return dt_local.strftime('%H:%M')
+
+
 class ConversationSearch:
     def __init__(self, db_path: str = "~/.conversation-search/index.db"):
         self.db_path = Path(db_path).expanduser()
@@ -379,9 +406,10 @@ class ConversationSearch:
             messages.reverse()  # Chronological order
 
             # Format conversation block
-            ts = datetime.fromisoformat(conv['last_message_at'].replace('Z', '+00:00'))
-            date_str = ts.strftime('%b-%d')
-            time_str = ts.strftime('%H:%M')
+            dt_utc = datetime.fromisoformat(conv['last_message_at'].replace('Z', '+00:00'))
+            dt_local = dt_utc.astimezone()
+            date_str = dt_local.strftime('%b-%d')
+            time_str = format_timestamp(conv['last_message_at'], include_date=False)
             session_short = conv['session_id'][:8]
 
             lines.append(f"## [{session_short}] {conv['conversation_summary']}")
@@ -400,8 +428,7 @@ class ConversationSearch:
                     len(summary.strip()) < 10):  # Skip very short/empty summaries
                     continue
 
-                msg_ts = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
-                msg_time = msg_ts.strftime('%H:%M')
+                msg_time = format_timestamp(msg['timestamp'], include_date=False)
                 icon = "👤" if msg['message_type'] == 'user' else "🤖"
                 branch = "🌿 " if msg['is_sidechain'] else ""
                 uuid_short = msg['message_uuid'][:8]
@@ -440,9 +467,7 @@ class ConversationSearch:
 
 def format_message_for_display(msg: Dict, include_content: bool = False) -> str:
     """Format a message for human-readable display"""
-    timestamp = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
-    time_str = timestamp.strftime('%Y-%m-%d %H:%M')
-
+    time_str = format_timestamp(msg['timestamp'])
     icon = "👤" if msg['message_type'] == 'user' else "🤖"
     branch_marker = "🌿" if msg['is_sidechain'] else ""
 
@@ -622,9 +647,7 @@ def main():
             # Print messages
             for msg in messages:
                 # Format timestamp
-                ts = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
-                time_str = ts.strftime('%H:%M:%S')
-
+                time_str = format_timestamp(msg['timestamp'], include_date=False, include_seconds=True)
                 uuid_short = msg['message_uuid'][:8]
                 msg_type = "👤" if msg['message_type'] == 'user' else "🤖"
                 is_sum = "✓" if msg['is_summarized'] else "✗"
@@ -760,8 +783,7 @@ def main():
                 print(json.dumps(messages, indent=2))
             else:
                 for msg in messages:
-                    ts = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
-                    time_str = ts.strftime('%Y-%m-%d %H:%M')
+                    time_str = format_timestamp(msg['timestamp'])
                     icon = "👤" if msg['message_type'] == 'user' else "🤖"
                     print(f"\n{icon} [{time_str}] {msg['project_path']}")
                     print(f"UUID: {msg['message_uuid']}")
@@ -785,12 +807,11 @@ def main():
             else:
                 print(f"\n📚 Recent conversations (last {args.days} days):\n")
                 for conv in results:
-                    timestamp = datetime.fromisoformat(conv['last_message_at'].replace('Z', '+00:00'))
-                    time_str = timestamp.strftime('%Y-%m-%d %H:%M')
+                    time_str = format_timestamp(conv['last_message_at'])
                     print(f"[{time_str}] {conv['conversation_summary']}")
-                    print(f"   Project: {conv['project_path']}")
-                    print(f"   Messages: {conv['message_count']}")
-                    print(f"   Session: {conv['session_id']}")
+                    print(f"  {conv['message_count']} messages")
+                    print(f"  {conv['project_path']}")
+                    print(f"  Session: {conv['session_id']}")
                     print()
 
         elif args.context:

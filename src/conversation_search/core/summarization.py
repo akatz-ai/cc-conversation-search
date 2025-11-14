@@ -241,6 +241,61 @@ class MessageSummarizer:
             conn.close()
 
 
+def message_uses_conversation_search(message: Dict) -> bool:
+    """
+    Detect if a message involves using the conversation-search tool.
+
+    Returns True if this is a Claude message that used the search tool.
+    This helps identify meta-conversations that should be filtered out.
+
+    Args:
+        message: Message dict with 'message_type' and 'content'
+
+    Returns:
+        True if message uses conversation-search, False otherwise
+    """
+    # Only assistant messages can use tools
+    if message.get('message_type') != 'assistant':
+        return False
+
+    content = message.get('content', '')
+    content_lower = content.lower()
+
+    # Pattern 1: Bash tool + cc-conversation-search command
+    # This means Claude RAN the command via Bash
+    if '[Tool: Bash]' in content and 'cc-conversation-search' in content:
+        return True
+
+    # Pattern 2: Direct cc-conversation-search command usage
+    # Look for command patterns like "cc-conversation-search search" or "cc-conversation-search list"
+    if 'cc-conversation-search' in content:
+        # Check if it looks like a command (has subcommands after it)
+        # Match patterns like: cc-conversation-search <subcommand>
+        cmd_pattern = r'cc-conversation-search\s+(search|list|index|tree|context|resume)'
+        if re.search(cmd_pattern, content):
+            return True
+
+    # Pattern 3: Skill activation markers (actual usage, not discussion)
+    if 'conversation-search skill is loading' in content_lower:
+        return True
+
+    if 'conversation-search skill is running' in content_lower:
+        return True
+
+    # Pattern 4: The quoted skill name with "is loading" or similar
+    # Check for patterns like: The "conversation-search" skill is loading
+    if '"conversation-search"' in content_lower and 'skill' in content_lower:
+        return True
+
+    # Pattern 5: Skill allowed tools marker
+    if 'allowed 1 tools for this command' in content_lower:
+        # Check if conversation-search is mentioned nearby
+        if 'conversation-search' in content_lower:
+            return True
+
+    return False
+
+
 def is_summarizer_conversation(conv_file: Path, messages: List[Dict]) -> bool:
     """
     Detect if this is an automated summarizer conversation

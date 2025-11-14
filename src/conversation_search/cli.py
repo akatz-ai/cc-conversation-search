@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from conversation_search.core.indexer import ConversationIndexer
-from conversation_search.core.search import ConversationSearch
+from conversation_search.core.search import ConversationSearch, format_timestamp
 
 __version__ = "0.4.7"
 
@@ -136,7 +136,7 @@ def cmd_search(args):
 
     for result in results:
         icon = "👤" if result['message_type'] == 'user' else "🤖"
-        timestamp = result['timestamp'][:16].replace('T', ' ')
+        timestamp = format_timestamp(result['timestamp'])
 
         # Convert project_path hash to actual path
         project_dir = result['project_path'].replace('-', '/')
@@ -249,7 +249,7 @@ def cmd_list(args):
     print(f"Recent conversations (last {args.days} days):\n")
 
     for conv in convs:
-        timestamp = conv['last_message_at'][:16].replace('T', ' ')
+        timestamp = format_timestamp(conv['last_message_at'])
         print(f"[{timestamp}] {conv['conversation_summary']}")
         print(f"  {conv['message_count']} messages")
         print(f"  {conv['project_path']}")

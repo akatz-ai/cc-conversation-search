@@ -12,7 +12,11 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from importlib.resources import files
-from conversation_search.core.summarization import MessageSummarizer, is_summarizer_conversation
+from conversation_search.core.summarization import (
+    MessageSummarizer,
+    is_summarizer_conversation,
+    message_uses_conversation_search
+)
 
 
 class ConversationIndexer:
@@ -153,6 +157,10 @@ class ConversationIndexer:
                                     elif block.get('type') == 'tool_use':
                                         tool_name = block.get('name', 'unknown')
                                         text_parts.append(f"[Tool: {tool_name}]")
+                                        # Include tool input for detection (especially for Bash commands)
+                                        tool_input = block.get('input', {})
+                                        if isinstance(tool_input, dict) and 'command' in tool_input:
+                                            text_parts.append(tool_input['command'])
                                     elif block.get('type') == 'tool_result':
                                         text_parts.append("[Tool result]")
                             msg_content = '\n'.join(text_parts)
@@ -194,6 +202,45 @@ class ConversationIndexer:
 
         return depths
 
+    def _find_search_pairs(self, messages: List[Dict]) -> set:
+        """
+        Find user-request + claude-search pairs to skip during indexing.
+
+        This identifies message pairs where:
+        1. User asks to find a conversation
+        2. Claude responds by using cc-conversation-search
+
+        These pairs are "meta-conversations" that pollute search results.
+
+        Args:
+            messages: List of message dicts with uuid, parent_uuid, message_type, content
+
+        Returns:
+            Set of message UUIDs to skip during indexing
+        """
+        skip_uuids = set()
+
+        # Build UUID -> message map for fast lookup
+        msg_map = {m['uuid']: m for m in messages}
+
+        # Find all Claude messages that use conversation-search
+        for message in messages:
+            if not message_uses_conversation_search(message):
+                continue
+
+            # Found a search message - add it to skip list
+            skip_uuids.add(message['uuid'])
+
+            # Add its parent (the user's search request)
+            parent_uuid = message.get('parent_uuid')
+            if parent_uuid and parent_uuid in msg_map:
+                # Verify parent is a user message (sanity check)
+                parent = msg_map[parent_uuid]
+                if parent.get('message_type') == 'user':
+                    skip_uuids.add(parent_uuid)
+
+        return skip_uuids
+
     def index_conversation(self, file_path: Path, summarize: bool = True):
         """Index a single conversation file with batch summarization"""
         if not self.quiet:
@@ -211,6 +258,20 @@ class ConversationIndexer:
         if is_summarizer_conversation(file_path, messages):
             if not self.quiet:
                 print(f"  ⏭️  Skipping automated summarizer conversation")
+            return
+
+        # Detect and filter search pairs to prevent meta-conversation pollution
+        skip_uuids = self._find_search_pairs(messages)
+        if skip_uuids:
+            if not self.quiet:
+                pair_count = len(skip_uuids) // 2  # Approximate number of pairs
+                print(f"  ⏭️  Skipping {len(skip_uuids)} meta-search messages (~{pair_count} pairs)")
+            # Filter out the search pairs
+            messages = [m for m in messages if m['uuid'] not in skip_uuids]
+
+        if not messages:
+            if not self.quiet:
+                print(f"  No messages to index after filtering")
             return
 
         # Extract project path from file location
