@@ -1,32 +1,35 @@
 #!/usr/bin/env python3
 """
-Claude Finder Search Tools
+Conversation Search Search Tools
 Provides search and retrieval tools for Claude to query conversation history
 """
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
-from claude_finder.core.summarization import MessageSummarizer
+from conversation_search.core.summarization import MessageSummarizer
 
 
 class ConversationSearch:
-    def __init__(self, db_path: str = "~/.claude-finder/index.db"):
+    def __init__(self, db_path: str = "~/.conversation-search/index.db"):
         self.db_path = Path(db_path).expanduser()
         if not self.db_path.exists():
             raise FileNotFoundError(
                 f"Database not found at {self.db_path}. "
                 "Run the indexer first: python src/indexer.py"
             )
-        self.conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+        self.conn = sqlite3.connect(str(self.db_path), timeout=30.0)
 
         # Enable WAL mode for concurrent access
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout
 
         self.conn.row_factory = sqlite3.Row
+        self._fts_rebuilt = False
 
     def search_conversations(
         self,
@@ -99,10 +102,21 @@ class ConversationSearch:
         sql += " ORDER BY m.timestamp DESC LIMIT ?"
         params.append(limit)
 
-        cursor.execute(sql, params)
-        results = cursor.fetchall()
-
-        return [dict(row) for row in results]
+        try:
+            cursor.execute(sql, params)
+            results = cursor.fetchall()
+            return [dict(row) for row in results]
+        except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+            # Handle FTS corruption
+            if 'fts5: missing row' in str(e) and not self._fts_rebuilt:
+                print("FTS index corruption detected, rebuilding...", file=sys.stderr)
+                self._rebuild_fts()
+                print("FTS index rebuilt, retrying search...", file=sys.stderr)
+                # Retry once
+                cursor.execute(sql, params)
+                results = cursor.fetchall()
+                return [dict(row) for row in results]
+            raise
 
     def get_conversation_context(
         self,
@@ -398,6 +412,27 @@ class ConversationSearch:
 
         return "\n".join(lines)
 
+    def _rebuild_fts(self):
+        """Rebuild FTS index from scratch"""
+        cursor = self.conn.cursor()
+
+        # Use FTS5 rebuild command - this is the proper way to rebuild content tables
+        cursor.execute("INSERT INTO message_summaries_fts(message_summaries_fts) VALUES('rebuild')")
+
+        self.conn.commit()
+        self._fts_rebuilt = True
+
+    def _validate_fts(self) -> bool:
+        """Check if FTS is in sync with messages table. Returns True if valid."""
+        cursor = self.conn.cursor()
+
+        try:
+            # FTS5 integrity check
+            cursor.execute("INSERT INTO message_summaries_fts(message_summaries_fts) VALUES('integrity-check')")
+            return True
+        except sqlite3.Error:
+            return False
+
     def close(self):
         """Close database connection"""
         self.conn.close()
@@ -460,7 +495,7 @@ def main():
                        help='Show full message content')
     parser.add_argument('--json', action='store_true',
                        help='Output as JSON')
-    parser.add_argument('--db', default='~/.claude-finder/index.db',
+    parser.add_argument('--db', default='~/.conversation-search/index.db',
                        help='Path to SQLite database')
 
     args = parser.parse_args()
@@ -470,7 +505,7 @@ def main():
     try:
         if args.cleanup:
             # Clean up database: mark tool noise and remove summarizer conversations
-            from claude_finder.core.summarization import MessageSummarizer, is_summarizer_conversation
+            from conversation_search.core.summarization import MessageSummarizer, is_summarizer_conversation
 
             print("🧹 Cleaning up database...")
             summarizer = MessageSummarizer(db_path=args.db)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Claude Finder Indexer
+Conversation Search Indexer
 Scans ~/.claude/projects and indexes conversations with batch AI summarization
 """
 
@@ -12,18 +12,19 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from importlib.resources import files
-from claude_finder.core.summarization import MessageSummarizer, is_summarizer_conversation
+from conversation_search.core.summarization import MessageSummarizer, is_summarizer_conversation
 
 
 class ConversationIndexer:
-    def __init__(self, db_path: str = "~/.claude-finder/index.db"):
+    def __init__(self, db_path: str = "~/.conversation-search/index.db"):
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), timeout=30.0)
 
         # Enable WAL mode for concurrent access
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout
 
         self.conn.row_factory = sqlite3.Row
         self._init_db()
@@ -32,7 +33,7 @@ class ConversationIndexer:
 
     def _init_db(self):
         """Initialize database with schema"""
-        schema_sql = files('claude_finder.data').joinpath('schema.sql').read_text()
+        schema_sql = files('conversation_search.data').joinpath('schema.sql').read_text()
         self.conn.executescript(schema_sql)
         self.conn.commit()
 
@@ -289,77 +290,91 @@ class ConversationIndexer:
                 len(messages)
             ))
 
-        # Batch process messages for summarization
-        needs_summary = []
+        # Batch process messages for smart extraction
+        needs_extraction = []
         tool_noise_uuids = []
         too_short_uuids = []
 
         for message in messages:
-            should_summarize, reason = self.summarizer.needs_summarization(message)
+            should_extract, reason = self.summarizer.needs_summarization(message)
 
             if reason == 'tool_noise':
                 tool_noise_uuids.append(message['uuid'])
             elif reason == 'too_short':
                 too_short_uuids.append(message['uuid'])
-            elif should_summarize and summarize:
-                needs_summary.append(message)
+            elif should_extract and summarize:  # 'summarize' flag now means "extract"
+                needs_extraction.append(message)
 
-        # Insert all messages first (without summaries for now)
-        for message in messages:
-            cursor.execute("""
-                INSERT INTO messages (
-                    message_uuid, session_id, parent_uuid, is_sidechain,
-                    depth, timestamp, message_type, project_path,
-                    conversation_file, summary, full_content
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                message['uuid'],
-                session_id,
-                message['parent_uuid'],
-                message['is_sidechain'],
-                depths.get(message['uuid'], 0),
-                message['timestamp'],
-                message['message_type'],
-                project_path,
-                str(file_path),
-                message['content'][:150] if len(message['content']) < 150 else message['content'][:147] + "...",
-                message['content']
-            ))
+        # Insert all messages in a single transaction
+        try:
+            for message in messages:
+                cursor.execute("""
+                    INSERT INTO messages (
+                        message_uuid, session_id, parent_uuid, is_sidechain,
+                        depth, timestamp, message_type, project_path,
+                        conversation_file, summary, full_content
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    message['uuid'],
+                    session_id,
+                    message['parent_uuid'],
+                    message['is_sidechain'],
+                    depths.get(message['uuid'], 0),
+                    message['timestamp'],
+                    message['message_type'],
+                    project_path,
+                    str(file_path),
+                    message['content'][:150] if len(message['content']) < 150 else message['content'][:147] + "...",
+                    message['content']
+                ))
 
-        self.conn.commit()
+            # Mark tool noise in same transaction
+            if tool_noise_uuids:
+                placeholders = ','.join('?' * len(tool_noise_uuids))
+                cursor.execute(f"""
+                    UPDATE messages
+                    SET is_tool_noise = TRUE, summary_method = 'too_short'
+                    WHERE message_uuid IN ({placeholders})
+                """, tool_noise_uuids)
 
-        # Mark tool noise
-        if tool_noise_uuids:
-            self.summarizer.mark_tool_noise(tool_noise_uuids)
-            print(f"  Marked {len(tool_noise_uuids)} messages as tool noise")
+            # Mark too short in same transaction
+            if too_short_uuids:
+                placeholders = ','.join('?' * len(too_short_uuids))
+                cursor.execute(f"""
+                    UPDATE messages
+                    SET is_summarized = TRUE, summary_method = 'too_short'
+                    WHERE message_uuid IN ({placeholders})
+                """, too_short_uuids)
 
-        # Mark too short
-        if too_short_uuids:
-            self.summarizer.mark_too_short(too_short_uuids)
+            # Commit once at the end
+            self.conn.commit()
 
-        # Batch summarize
-        if summarize and needs_summary:
-            print(f"  Batch summarizing {len(needs_summary)} messages...")
-            batch_size = 20
+            if tool_noise_uuids:
+                print(f"  Marked {len(tool_noise_uuids)} messages as tool noise")
 
-            total_updated = 0
-            for i in range(0, len(needs_summary), batch_size):
-                batch = needs_summary[i:i+batch_size]
-                print(f"    Processing batch {i//batch_size + 1}/{(len(needs_summary)-1)//batch_size + 1}...")
+        except sqlite3.Error as e:
+            self.conn.rollback()
+            print(f"  Error during indexing, rolled back: {e}")
+            raise
 
-                summaries = self.summarizer.summarize_batch(batch)
-                if summaries:
-                    updated = self.summarizer.update_database(summaries)
-                    total_updated += updated
+        # Smart extraction (instant, no API calls)
+        if summarize and needs_extraction:
+            print(f"  Extracting searchable text from {len(needs_extraction)} messages...")
+
+            # Extract in single batch (no API, instant)
+            extractions = self.summarizer.extract_batch(needs_extraction)
+            if extractions:
+                updated = self.summarizer.update_database(extractions, method='smart_extraction')
+                print(f"  ✓ Extracted {updated}/{len(needs_extraction)} summaries")
 
             if is_update:
-                print(f"  ✓ Added {len(messages)} new messages, summarized {total_updated}/{len(needs_summary)}")
+                print(f"  ✓ Added {len(messages)} new messages with smart extraction")
             else:
-                print(f"  ✓ Summarized {total_updated}/{len(needs_summary)} messages")
+                print(f"  ✓ Indexed {len(messages)} messages with smart extraction")
         elif is_update:
-            print(f"  ✓ Added {len(messages)} new messages (no summarization)")
+            print(f"  ✓ Added {len(messages)} new messages (no extraction)")
         else:
-            print(f"  ✓ Indexed {len(messages)} messages (no summarization)")
+            print(f"  ✓ Indexed {len(messages)} messages (no extraction)")
 
     def index_all(self, days_back: Optional[int] = 1, summarize: bool = True):
         """Index all conversations from the last N days"""
@@ -390,19 +405,19 @@ def main():
                        help='Index conversations from last N days (default: 1)')
     parser.add_argument('--all', action='store_true',
                        help='Index all conversations regardless of age')
-    parser.add_argument('--no-summarize', action='store_true',
-                       help='Skip AI summarization (faster but less useful)')
-    parser.add_argument('--db', default='~/.claude-finder/index.db',
+    parser.add_argument('--no-extract', action='store_true',
+                       help='Skip smart extraction (store only raw content)')
+    parser.add_argument('--db', default='~/.conversation-search/index.db',
                        help='Path to SQLite database')
 
     args = parser.parse_args()
 
     days_back = None if args.all else args.days
-    summarize = not args.no_summarize
+    extract = not args.no_extract
 
     indexer = ConversationIndexer(db_path=args.db)
     try:
-        indexer.index_all(days_back=days_back, summarize=summarize)
+        indexer.index_all(days_back=days_back, summarize=extract)
     finally:
         indexer.close()
 

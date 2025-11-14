@@ -2,43 +2,43 @@
 
 ## Complete Command Reference
 
-### claude-finder init
+### conversation-search init
 
 Initialize the database and perform initial indexing.
 
 ```bash
-claude-finder init [--days DAYS] [--no-summarize] [--force]
+conversation-search init [--days DAYS] [--no-extract] [--force]
 ```
 
 **Options:**
 - `--days DAYS`: Index last N days of conversations (default: 7)
-- `--no-summarize`: Skip AI summarization, use truncation (faster)
+- `--no-extract`: Skip smart extraction, store only raw content
 - `--force`: Reinitialize existing database
 
 **What it does:**
-1. Creates `~/.claude-finder/index.db` SQLite database
+1. Creates `~/.conversation-search/index.db` SQLite database
 2. Scans `~/.claude/projects/` for conversation files
 3. Parses JSONL conversation format
-4. Generates AI summaries using Claude Haiku (via `claude` CLI)
+4. Extracts searchable content using smart hybrid extraction (instant, no AI)
 5. Builds FTS5 search index
 
 **Example:**
 ```bash
 # Initialize with last 30 days
-claude-finder init --days 30
+conversation-search init --days 30
 
-# Quick init without AI summaries
-claude-finder init --no-summarize
+# Store only raw content (skip extraction)
+conversation-search init --no-extract
 ```
 
 ---
 
-### claude-finder search
+### conversation-search search
 
-Search conversations using full-text search on AI-generated summaries.
+Search conversations using full-text search on smart-extracted content.
 
 ```bash
-claude-finder search QUERY [--days DAYS] [--project PROJECT] [--limit LIMIT] [--content] [--json]
+conversation-search search QUERY [--days DAYS] [--project PROJECT] [--limit LIMIT] [--content] [--json]
 ```
 
 **Arguments:**
@@ -60,26 +60,26 @@ claude-finder search QUERY [--days DAYS] [--project PROJECT] [--limit LIMIT] [--
 **Examples:**
 ```bash
 # Basic search
-claude-finder search "authentication"
+conversation-search search "authentication"
 
 # Time-scoped search
-claude-finder search "database" --days 30
+conversation-search search "database" --days 30
 
 # Project-specific search
-claude-finder search "api" --project /home/user/myapp
+conversation-search search "api" --project /home/user/myapp
 
 # Get JSON output (for programmatic use)
-claude-finder search "hooks" --json
+conversation-search search "hooks" --json
 ```
 
 ---
 
-### claude-finder context
+### conversation-search context
 
 Get conversation context around a specific message.
 
 ```bash
-claude-finder context MESSAGE_UUID [--depth DEPTH] [--content] [--json]
+conversation-search context MESSAGE_UUID [--depth DEPTH] [--content] [--json]
 ```
 
 **Arguments:**
@@ -98,20 +98,20 @@ claude-finder context MESSAGE_UUID [--depth DEPTH] [--content] [--json]
 **Example:**
 ```bash
 # Get context for a message
-claude-finder context abc-123-def --depth 5
+conversation-search context abc-123-def --depth 5
 
 # With full content
-claude-finder context abc-123-def --content --json
+conversation-search context abc-123-def --content --json
 ```
 
 ---
 
-### claude-finder list
+### conversation-search list
 
 List recent conversations.
 
 ```bash
-claude-finder list [--days DAYS] [--limit LIMIT] [--json]
+conversation-search list [--days DAYS] [--limit LIMIT] [--json]
 ```
 
 **Options:**
@@ -122,20 +122,20 @@ claude-finder list [--days DAYS] [--limit LIMIT] [--json]
 **Example:**
 ```bash
 # List last week's conversations
-claude-finder list --days 7
+conversation-search list --days 7
 
 # List last 50 conversations
-claude-finder list --limit 50 --json
+conversation-search list --limit 50 --json
 ```
 
 ---
 
-### claude-finder tree
+### conversation-search tree
 
 Show the conversation tree structure for a session.
 
 ```bash
-claude-finder tree SESSION_ID [--json]
+conversation-search tree SESSION_ID [--json]
 ```
 
 **Arguments:**
@@ -148,69 +148,44 @@ claude-finder tree SESSION_ID [--json]
 
 **Example:**
 ```bash
-claude-finder tree session-abc-123
+conversation-search tree session-abc-123
 ```
 
 ---
 
-### claude-finder index
+### conversation-search index
 
-Re-index conversations (useful for catching up after tool updates).
+JIT index conversations (instant, no AI calls). The skill runs this before every search.
 
 ```bash
-claude-finder index [--days DAYS] [--all] [--no-summarize]
+conversation-search index [--days DAYS] [--all] [--no-extract]
 ```
 
 **Options:**
 - `--days DAYS`: Index last N days (default: 1)
 - `--all`: Index all conversations
-- `--no-summarize`: Skip AI summarization
+- `--no-extract`: Skip smart extraction
+
+**What it does:**
+- Scans for new/modified conversations
+- Extracts searchable content (instant, deterministic)
+- Updates FTS5 search index
+- Typically completes in <1 second for recent conversations
 
 **Example:**
 ```bash
-# Reindex last 7 days
-claude-finder index --days 7
+# JIT index last week (typical usage)
+conversation-search index --days 7
 
 # Reindex everything
-claude-finder index --all
-```
-
----
-
-### claude-finder watch
-
-Start file watcher daemon for real-time indexing.
-
-```bash
-claude-finder watch [--verbose]
-```
-
-**Options:**
-- `--verbose`: Print file change events
-
-**What it does:**
-1. Monitors `~/.claude/projects/` for file changes
-2. Waits 30 seconds after last change (idle threshold)
-3. Re-indexes modified conversations
-4. Runs batch AI summarization on new messages
-
-**Usage:**
-Run in a separate terminal or tmux/screen session:
-```bash
-# In tmux
-tmux new -s claude-watcher
-claude-finder watch
-# Detach: Ctrl+B, D
-
-# Later, reattach
-tmux attach -t claude-watcher
+conversation-search index --all
 ```
 
 ---
 
 ## Database Schema
 
-**Location:** `~/.claude-finder/index.db`
+**Location:** `~/.conversation-search/index.db`
 
 **Tables:**
 - `messages`: Individual messages with summaries and tree structure
@@ -222,23 +197,25 @@ tmux attach -t claude-watcher
 - `message_uuid`: Unique message identifier
 - `parent_uuid`: Parent message (tree structure)
 - `session_id`: Conversation session
-- `summary`: AI-generated 1-2 sentence summary
+- `summary`: Smart-extracted searchable content
 - `full_content`: Original message content
-- `is_summarized`: Has AI summary (vs truncation)
+- `summary_method`: 'smart_extraction', 'too_short', or 'tool_noise'
 
 ---
 
-## How Summarization Works
+## How Smart Extraction Works
 
-1. **Batch Processing**: Messages are grouped in batches of 20
-2. **Claude Haiku**: Uses `claude` CLI in headless mode
-3. **Prompt**: "Summarize this message in 1-2 sentences"
-4. **Noise Filtering**: Filters out tool spam and system messages
-5. **Fallback**: If API unavailable, uses smart truncation
+1. **User Messages**: Full content indexed (avg 3.5K chars, important info upfront)
+2. **Assistant Messages**: First 500 + last 200 chars + tool usage metadata
+3. **Tool Noise**: Pure tool markers filtered automatically
+4. **Short Messages**: Raw content used (< 50 chars)
+5. **Instant**: No AI API calls, deterministic, ~1000+ messages/second
 
-**Requirements:**
-- `claude` CLI must be installed and available in PATH
-- Anthropic API key configured (via `claude` login)
+**Advantages:**
+- Zero cost (no API calls)
+- 100% coverage (never miss content)
+- Instant indexing (no network latency)
+- Deterministic (same input = same output)
 
 ---
 
@@ -278,8 +255,8 @@ All commands support `--json` for structured output.
 
 1. **Use `--days` to scope searches** - Faster and more relevant
 2. **Start with summaries** - Only use `--content` when needed
-3. **Run watcher for freshness** - Keeps index up-to-date
-4. **Periodic reindexing** - `claude-finder index --days 30` weekly
+3. **JIT indexing** - Skill runs `index --days 7` before search (instant)
+4. **Periodic full reindex** - `conversation-search index --all` monthly
 5. **Project filtering** - Use `--project` for focused searches
 
 ---
@@ -307,22 +284,22 @@ This Skill is designed to work with Claude Code's conversation format:
 
 **Import errors after installation:**
 - Ensure using Python 3.9+
-- Try: `uv tool uninstall claude-finder && uv tool install claude-finder`
+- Try: `uv tool uninstall conversation-search && uv tool install conversation-search`
 
 **Search returns no results:**
-- Check if database exists: `ls ~/.claude-finder/index.db`
-- Reindex: `claude-finder index --days 30`
+- Check if database exists: `ls ~/.conversation-search/index.db`
+- Run JIT index: `conversation-search index --days 30`
 - Verify conversations exist: `ls ~/.claude/projects/`
 
-**Watcher not processing changes:**
-- Check DB permissions
-- Verify `~/.claude/projects/` path
-- Look for errors in watcher output
+**Database locked errors:**
+- Close other instances of conversation-search
+- Database uses WAL mode for concurrent access
+- Check permissions: `ls -la ~/.conversation-search/`
 
-**Slow summarization:**
-- Use `--no-summarize` for faster indexing
-- Check Claude CLI authentication: `claude --version`
-- Haiku API rate limits may apply
+**Indexing seems slow:**
+- Smart extraction is instant (~1000+ msgs/sec)
+- If slow, check disk I/O or file system latency
+- Try: `conversation-search index --all` to rebuild
 
 ---
 
@@ -346,10 +323,10 @@ for r in results:
 **Batch operations:**
 ```bash
 # Export all conversations about "database"
-claude-finder search "database" --json > database_convs.json
+conversation-search search "database" --json > database_convs.json
 
 # Reindex specific time range
 for days in 7 14 30; do
-    claude-finder index --days $days
+    conversation-search index --days $days
 done
 ```

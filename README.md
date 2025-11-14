@@ -1,105 +1,121 @@
-# Claude Finder
+# Conversation Search
 
-A powerful conversation indexing and search system for Claude Code that enables semantic search across your entire conversation history with progressive disclosure.
+Find and resume past Claude Code conversations using smart hybrid extraction and JIT indexing. Get session IDs and project paths to easily jump back into previous work.
 
 ## Features
 
-- **Unified CLI**: Single `claude-finder` command with intuitive subcommands
-- **Automatic Indexing**: Indexes conversations from `~/.claude/projects` with AI-generated summaries
-- **Semantic Search**: Full-text search across Haiku-generated message summaries
-- **Conversation Context**: Progressive disclosure - expand context incrementally as needed
-- **Real-time Updates**: Optional file watcher for automatic indexing
-- **Claude Code Skill**: Integrated Skill for Claude to search conversation history
+- **Session Resumption**: Get exact commands to resume past conversations
+- **Unified CLI**: Single `conversation-search` command with intuitive subcommands
+- **Smart Extraction**: Hybrid indexing (full user content + smart assistant extraction)
+- **JIT Indexing**: Instant indexing before search (no AI calls, no delays)
+- **Progressive Exploration**: Simple search → broader search → manual exploration
+- **Conversation Context**: Expand context incrementally around any message
+- **Claude Code Skill**: Integrated Skill that outputs session resumption commands
 - **Multi-Project Support**: Works across all your Claude Code projects
 
 ## Quick Start
 
-### Installation
+### Installation via Claude Code Plugin (Recommended)
+
+Install the complete plugin (skill + CLI tool instructions) directly in Claude Code:
+
+```bash
+/plugin install akatz-ai/cc-conversation-search
+```
+
+Then follow the installation instructions shown by Claude to:
+1. Install the CLI tool: `uv tool install cc-conversation-search`
+2. Initialize the database: `conversation-search init`
+
+### Manual Installation
+
+#### 1. Install CLI Tool
 
 ```bash
 # Using uv (recommended)
-uv tool install claude-finder
+uv tool install cc-conversation-search
 
 # Or using pip
-pip install claude-finder
+pip install cc-conversation-search
 ```
 
-### Initialize
+#### 2. Initialize Database
 
 ```bash
-claude-finder init
+conversation-search init
 ```
 
 This creates the database and indexes your last 7 days of conversations.
 
-### Search
+#### 3. Install Skill (Optional)
 
 ```bash
-# Search for conversations
-claude-finder search "authentication bug"
+mkdir -p ~/.claude/skills/conversation-search
+cp skills/conversation-search/* ~/.claude/skills/conversation-search/
+```
+
+### Basic Usage
+
+```bash
+# Search for conversations (shows session ID and resume commands)
+conversation-search search "authentication bug"
 
 # Search with time filter
-claude-finder search "react hooks" --days 30
+conversation-search search "react hooks" --days 30
 
-# Get full content
-claude-finder search "database migration" --content
+# Get resume commands for a specific message
+conversation-search resume <MESSAGE_UUID>
 ```
 
-### Install Claude Code Skill (Optional)
+### Using with Claude Code Skill
 
-For Claude to automatically search your conversation history:
+Once installed, ask Claude:
+- "Find that conversation where we discussed authentication"
+- "Locate the conversation about React hooks"
+- "What did we talk about regarding the database?"
 
-```bash
-# Personal Skill
-mkdir -p ~/.claude/skills/conversation-search
-cp skill/SKILL.md ~/.claude/skills/conversation-search/
-cp skill/REFERENCE.md ~/.claude/skills/conversation-search/
+**Auto-Installation**: If the CLI tool isn't installed, the skill will automatically attempt to install it via `uv` or `pip`, then initialize the database. In most cases, everything "just works" after installing the plugin!
 
-# Now ask Claude: "What did we discuss about authentication?"
-```
+Claude will show you the session ID, project path, and exact commands to resume the conversation.
 
 ## Command Reference
 
-### `claude-finder init`
+### `conversation-search init`
 Initialize database and perform initial indexing
 ```bash
-claude-finder init [--days 7] [--no-summarize] [--force]
+conversation-search init [--days 7] [--no-extract] [--force]
 ```
 
-### `claude-finder search`
+### `conversation-search index`
+JIT index conversations (instant, no AI calls)
+```bash
+conversation-search index [--days N] [--all] [--no-extract]
+```
+
+**IMPORTANT**: The skill always runs `index` before `search` for fresh data.
+
+### `conversation-search search`
 Search conversations
 ```bash
-claude-finder search "query" [--days N] [--project PATH] [--content] [--json]
+conversation-search search "query" [--days N] [--project PATH] [--content] [--json]
 ```
 
-### `claude-finder context`
+### `conversation-search context`
 Get context around a specific message
 ```bash
-claude-finder context MESSAGE_UUID [--depth 5] [--content] [--json]
+conversation-search context MESSAGE_UUID [--depth 5] [--content] [--json]
 ```
 
-### `claude-finder list`
+### `conversation-search list`
 List recent conversations
 ```bash
-claude-finder list [--days 7] [--limit 20] [--json]
+conversation-search list [--days 7] [--limit 20] [--json]
 ```
 
-### `claude-finder tree`
+### `conversation-search tree`
 View conversation tree structure
 ```bash
-claude-finder tree SESSION_ID [--json]
-```
-
-### `claude-finder index`
-Re-index conversations
-```bash
-claude-finder index [--days N] [--all] [--no-summarize]
-```
-
-### `claude-finder watch`
-Start file watcher for real-time indexing
-```bash
-claude-finder watch [--verbose]
+conversation-search tree SESSION_ID [--json]
 ```
 
 ## Architecture
@@ -112,10 +128,11 @@ claude-finder watch [--verbose]
 └── skills/
     └── conversation-search/  # Optional Skill
 
-~/.claude-finder/
-├── index.db           # SQLite database with indexed conversations
-└── watcher.log        # Optional watcher logs
+~/.conversation-search/
+└── index.db           # SQLite database with indexed conversations
 ```
+
+**Key Purpose**: Find session IDs and project paths to resume past conversations.
 
 ### Database Schema
 
@@ -127,9 +144,9 @@ claude-finder watch [--verbose]
 ## How It Works
 
 1. **Indexer**: Scans `~/.claude/projects/` for JSONL conversation files, parses tree structure
-2. **Summarizer**: Calls Claude Haiku via `claude` CLI to generate 1-2 sentence summaries
-3. **Search**: FTS5 semantic search over summaries with conversation tree traversal
-4. **Watcher**: Optional daemon that monitors file changes and updates index in real-time
+2. **Smart Extraction**: Hybrid approach - full user content + first 500/last 200 chars for assistant
+3. **Search**: FTS5 full-text search over extracted content with conversation tree traversal
+4. **JIT Indexing**: Skill runs `index` before `search` for fresh data (instant, no AI calls)
 
 ## Claude Code Skill
 
@@ -137,78 +154,77 @@ The included Skill allows Claude to search your conversation history automatical
 
 **Example usage:**
 ```
-User: "What did we discuss about React hooks last week?"
+User: "Find that conversation where we started implementing the API"
 Claude: [Activates conversation-search Skill]
-        [Runs: claude-finder search "react hooks" --days 7 --json]
-        [Presents results with context]
+        [Runs Level 0: conversation-search index --days 7]  (instant JIT index)
+        [Runs Level 1: conversation-search search "implementing API" --days 14 --json]
+        [Finds match]
+        [Displays session ID, project path, and resume commands]
+
+        Output:
+        Session: abc-123-session-id
+        Project: /home/user/projects/myproject
+        Time: 2025-11-13 22:50
+
+        To resume:
+          cd /home/user/projects/myproject
+          claude --resume abc-123-session-id
 ```
 
-See `skill/SKILL.md` for complete Skill documentation.
+See `skills/conversation-search/SKILL.md` for progressive search workflow and complete documentation.
 
 ## Advanced Usage
-
-### Real-time Indexing with Watcher
-
-Run in a separate terminal or tmux:
-```bash
-claude-finder watch
-```
-
-The watcher:
-- Monitors `~/.claude/projects/` for changes
-- Waits 30 seconds after last change (idle threshold)
-- Re-indexes modified conversations
-- Runs batch AI summarization on new messages
 
 ### JSON Output for Scripting
 
 All commands support `--json` flag:
 ```bash
 # Export search results
-claude-finder search "authentication" --json > auth_convs.json
+conversation-search search "authentication" --json > auth_convs.json
 
 # Programmatic processing
-claude-finder list --days 30 --json | jq '.[] | .conversation_summary'
+conversation-search list --days 30 --json | jq '.[] | .conversation_summary'
 ```
 
 ### Programmatic Use
 
 ```python
-from claude_finder.core.search import ConversationSearch
-from claude_finder.core.indexer import ConversationIndexer
+from conversation_search.core.search import ConversationSearch
+from conversation_search.core.indexer import ConversationIndexer
 
-# Search
+# Search for messages
 search = ConversationSearch()
 results = search.search_conversations("authentication", days_back=7)
 for r in results:
-    print(f"{r['timestamp']}: {r['summary']}")
+    print(f"{r['message_uuid']}: {r['summary']}")  # UUID for branching
 
-# Index
+# Index conversations
 indexer = ConversationIndexer()
-indexer.scan_and_index(days_back=7)
+indexer.index_all(days_back=7)
 indexer.close()
 ```
 
 ## Configuration
 
-**Database location:** `~/.claude-finder/index.db`
+**Database location:** `~/.conversation-search/index.db`
 
 **No configuration file needed** - all settings via command-line flags.
 
 ## Performance
 
-- **Summarization**: Uses Haiku for fast, cheap summaries (~1-2 sentences per message)
-- **Indexing Speed**: ~10-50 messages/second (depends on Haiku API latency)
-- **Storage**: ~1-2KB per message (summary + metadata)
+- **Smart Extraction**: Instant (no AI calls), deterministic
+- **Indexing Speed**: ~1000+ messages/second (no API latency)
+- **Storage**: ~1-2KB per message (extracted text + metadata)
 - **Search Speed**: SQLite FTS5 is very fast, even with 100K+ messages
+- **Cost**: $0 (no AI API calls during indexing)
 
 ## Development
 
 ### Setup
 
 ```bash
-git clone https://github.com/yourusername/claude-finder
-cd claude-finder
+git clone https://github.com/akatz-ai/cc-conversation-search
+cd cc-conversation-search
 uv tool install -e .
 ```
 
@@ -221,22 +237,21 @@ pytest tests/
 ### Project Structure
 
 ```
-claude-finder/
+conversation-search/
 ├── src/
-│   └── claude_finder/
+│   └── conversation_search/
 │       ├── __init__.py
 │       ├── cli.py              # Unified CLI
 │       ├── core/
 │       │   ├── indexer.py      # Conversation indexing
 │       │   ├── search.py       # Search functionality
-│       │   ├── summarization.py # AI summarization
-│       │   └── watcher.py      # File watcher daemon
+│       │   └── summarization.py # Smart hybrid extraction
 │       └── data/
 │           └── schema.sql      # Database schema
-├── skill/
-│   ├── SKILL.md               # Claude Code Skill
-│   ├── REFERENCE.md           # Technical reference
-│   └── INSTALL.md             # Installation guide
+├── skills/
+│   └── conversation-search/
+│       ├── SKILL.md           # Claude Code Skill with progressive workflow
+│       └── REFERENCE.md       # Complete command reference
 ├── pyproject.toml
 └── README.md
 ```
@@ -245,17 +260,17 @@ claude-finder/
 
 **"Database not found" error:**
 ```bash
-claude-finder init
+conversation-search init
 ```
 
 **"No conversations found":**
 - Verify `~/.claude/projects/` exists and contains JSONL files
 - Use Claude Code to create some conversations first
 
-**Slow summarization:**
+**Want to skip extraction and use raw content only:**
 ```bash
-# Skip AI summaries (faster, uses smart truncation)
-claude-finder init --no-summarize
+# Store only raw content (even faster, but less optimized for search)
+conversation-search init --no-extract
 ```
 
 **Skill not activating:**
@@ -266,8 +281,8 @@ claude-finder init --no-summarize
 
 **Import errors:**
 ```bash
-uv tool uninstall claude-finder
-uv tool install claude-finder
+uv tool uninstall cc-conversation-search
+uv tool install cc-conversation-search
 ```
 
 ## Contributing
@@ -288,4 +303,4 @@ MIT
 
 ## Acknowledgments
 
-Built for the Claude Code ecosystem. Uses Claude Haiku for intelligent message summarization.
+Built for the Claude Code ecosystem. Uses smart hybrid extraction for instant, cost-free indexing.

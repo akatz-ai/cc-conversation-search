@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""Unified CLI for claude-finder"""
+"""Unified CLI for conversation-search"""
 
 import argparse
 import json
 import sys
 from pathlib import Path
 
-from claude_finder.core.indexer import ConversationIndexer
-from claude_finder.core.search import ConversationSearch
-from claude_finder.core.watcher import start_watcher
+from conversation_search.core.indexer import ConversationIndexer
+from conversation_search.core.search import ConversationSearch
 
 
 def cmd_init(args):
     """Initialize the database and run initial indexing"""
-    print("Claude Finder - Initializing")
+    print("Conversation Search - Initializing")
     print("=" * 50)
 
-    db_path = Path.home() / ".claude-finder" / "index.db"
+    db_path = Path.home() / ".conversation-search" / "index.db"
 
     if db_path.exists() and not args.force:
         print(f"✓ Database already exists: {db_path}")
@@ -42,22 +41,22 @@ def cmd_init(args):
     for i, conv_file in enumerate(files, 1):
         try:
             print(f"  [{i}/{len(files)}] {conv_file.name}", end="\r")
-            indexer.index_conversation(conv_file, summarize=not args.no_summarize)
+            indexer.index_conversation(conv_file, summarize=not args.no_extract)
         except Exception as e:
             print(f"\n  Error indexing {conv_file.name}: {e}")
 
     print(f"\n\n✓ Initialization complete!")
     print(f"  Database: {db_path}")
     print(f"\nNext steps:")
-    print(f"  • Search conversations: claude-finder search '<query>'")
-    print(f"  • List recent: claude-finder list")
-    print(f"  • Watch for updates: claude-finder watch")
+    print(f"  • Search conversations: conversation-search search '<query>'")
+    print(f"  • List recent: conversation-search list")
+    print(f"  • Re-index: conversation-search index")
 
     indexer.close()
 
 
 def cmd_index(args):
-    """Index conversations"""
+    """Index conversations (JIT - fast without AI calls)"""
     indexer = ConversationIndexer()
 
     files = indexer.scan_conversations(days_back=args.days if not args.all else None)
@@ -71,7 +70,7 @@ def cmd_index(args):
     for i, conv_file in enumerate(files, 1):
         try:
             print(f"[{i}/{len(files)}] {conv_file.name}", end="\r")
-            indexer.index_conversation(conv_file, summarize=not args.no_summarize)
+            indexer.index_conversation(conv_file, summarize=not args.no_extract)
         except Exception as e:
             print(f"\nError indexing {conv_file.name}: {e}")
 
@@ -83,12 +82,16 @@ def cmd_search(args):
     """Search conversations"""
     search = ConversationSearch()
 
-    results = search.search_conversations(
-        query=args.query,
-        days_back=args.days,
-        limit=args.limit,
-        project_path=args.project
-    )
+    try:
+        results = search.search_conversations(
+            query=args.query,
+            days_back=args.days,
+            limit=args.limit,
+            project_path=args.project
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+        raise
 
     if args.json:
         print(json.dumps([dict(r) for r in results], indent=2))
@@ -104,21 +107,27 @@ def cmd_search(args):
         icon = "👤" if result['message_type'] == 'user' else "🤖"
         timestamp = result['timestamp'][:16].replace('T', ' ')
 
-        print(f"{icon}  [{timestamp}] {result['project_path']}")
+        # Convert project_path hash to actual path
+        project_dir = result['project_path'].replace('-', '/')
+        if not project_dir.startswith('/'):
+            project_dir = f"/{project_dir}"
+
+        print(f"{icon}  {result['conversation_summary']}")
+        print(f"   Session: {result['session_id']}")
+        print(f"   Project: {project_dir}")
+        print(f"   Time: {timestamp}")
+        print(f"   Message: {result['message_uuid']}")
 
         if args.content:
-            # Show full content
             content = search.get_full_message_content(result['message_uuid'])
             if content:
-                print(f"   {content[:500]}...")
-            else:
-                print(f"   {result['summary']}")
+                print(f"\n   {content[:300]}...")
         else:
-            # Show summary
-            print(f"   {result['summary']}")
+            print(f"\n   {result['summary']}")
 
-        print(f"   UUID: {result['message_uuid']}")
-        print(f"   Conversation: {result['conversation_summary']}")
+        print(f"\n   Resume:")
+        print(f"     cd {project_dir}")
+        print(f"     clauded --resume {result['session_id']}")
         print()
 
 
@@ -219,18 +228,43 @@ def cmd_tree(args):
             if node.get('children'):
                 print_tree(node['children'], indent + 1)
 
-    print_tree([tree])
+    print_tree(tree['tree'])
 
 
-def cmd_watch(args):
-    """Start the file watcher daemon"""
-    start_watcher(verbose=args.verbose)
+def cmd_resume(args):
+    """Get session resumption commands for a message UUID"""
+    search = ConversationSearch()
+
+    # Get message info
+    cursor = search.conn.cursor()
+    cursor.execute("""
+        SELECT m.session_id, m.project_path, m.timestamp, m.summary
+        FROM messages m
+        WHERE m.message_uuid = ?
+    """, (args.uuid,))
+
+    result = cursor.fetchone()
+
+    if not result:
+        print(f"Message not found: {args.uuid}")
+        sys.exit(1)
+
+    session_id = result['session_id']
+    project_path = result['project_path']
+
+    # Convert project_path hash back to actual path
+    project_dir = project_path.replace('-', '/')
+    if not project_dir.startswith('/'):
+        project_dir = f"/{project_dir}"
+
+    print(f"cd {project_dir}")
+    print(f"clauded --resume {session_id}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        prog='claude-finder',
-        description='Semantic search across Claude Code conversation history'
+        prog='conversation-search',
+        description='Find and resume Claude Code conversations using semantic search'
     )
 
     subparsers = parser.add_subparsers(dest='command', help='Command to run')
@@ -238,15 +272,15 @@ def main():
     # init command
     init_parser = subparsers.add_parser('init', help='Initialize database and index')
     init_parser.add_argument('--days', type=int, default=7, help='Days of history to index (default: 7)')
-    init_parser.add_argument('--no-summarize', action='store_true', help='Skip AI summarization (faster)')
+    init_parser.add_argument('--no-extract', action='store_true', help='Skip smart extraction (store only raw content)')
     init_parser.add_argument('--force', action='store_true', help='Reinitialize existing database')
     init_parser.set_defaults(func=cmd_init)
 
     # index command
-    index_parser = subparsers.add_parser('index', help='Index conversations')
+    index_parser = subparsers.add_parser('index', help='Index conversations (JIT - runs before search)')
     index_parser.add_argument('--days', type=int, default=1, help='Days back to index (default: 1)')
     index_parser.add_argument('--all', action='store_true', help='Index all conversations')
-    index_parser.add_argument('--no-summarize', action='store_true', help='Skip AI summarization')
+    index_parser.add_argument('--no-extract', action='store_true', help='Skip smart extraction')
     index_parser.set_defaults(func=cmd_index)
 
     # search command
@@ -280,10 +314,10 @@ def main():
     tree_parser.add_argument('--json', action='store_true', help='Output as JSON')
     tree_parser.set_defaults(func=cmd_tree)
 
-    # watch command
-    watch_parser = subparsers.add_parser('watch', help='Watch for conversation updates')
-    watch_parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
-    watch_parser.set_defaults(func=cmd_watch)
+    # resume command
+    resume_parser = subparsers.add_parser('resume', help='Get session resumption commands')
+    resume_parser.add_argument('uuid', help='Message UUID')
+    resume_parser.set_defaults(func=cmd_resume)
 
     args = parser.parse_args()
 
@@ -295,7 +329,7 @@ def main():
         args.func(args)
     except FileNotFoundError as e:
         print(f"Error: {e}")
-        print("\nRun 'claude-finder init' to initialize the database")
+        print("\nRun 'conversation-search init' to initialize the database")
         sys.exit(1)
     except KeyboardInterrupt:
         print("\n\nInterrupted")
