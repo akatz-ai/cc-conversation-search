@@ -1,0 +1,18 @@
+{
+  "name": "cc-conversation-search",
+  "owner": {
+    "name": "akatz-ai",
+    "url": "https://github.com/akatz-ai"
+  },
+  "description": "Claude Code plugins by akatz-ai",
+  "plugins": [
+    {
+      "name": "conversation-search",
+      "source": ".",
+      "version": "0.4.0",
+      "description": "Find and resume Claude Code conversations using semantic search. Returns session IDs and project paths for easy resumption via 'claude --resume'.",
+      "author": "akatz-ai",
+      "homepage": "https://github.com/akatz-ai/cc-conversation-search"
+    }
+  ]
+}
