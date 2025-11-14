@@ -9,7 +9,7 @@ from pathlib import Path
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 
 def cmd_init(args):
@@ -60,9 +60,9 @@ def cmd_init(args):
         print(f"\n\n✓ Initialization complete!")
         print(f"  Database: {db_path}")
         print(f"\nNext steps:")
-        print(f"  • Search conversations: conversation-search search '<query>'")
-        print(f"  • List recent: conversation-search list")
-        print(f"  • Re-index: conversation-search index")
+        print(f"  • Search conversations: cc-conversation-search search '<query>'")
+        print(f"  • List recent: cc-conversation-search list")
+        print(f"  • Re-index: cc-conversation-search index")
 
     indexer.close()
 
@@ -279,7 +279,7 @@ def cmd_resume(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog='conversation-search',
+        prog='cc-conversation-search',
         description='Find and resume Claude Code conversations using semantic search'
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
@@ -348,9 +348,9 @@ def main():
         args.func(args)
     except FileNotFoundError as e:
         print(f"Error: {e}")
-        print("\nThe conversation-search tool requires initialization.")
+        print("\nThe cc-conversation-search tool requires initialization.")
         print("Install: uv tool install cc-conversation-search")
-        print("Initialize: conversation-search init")
+        print("Initialize: cc-conversation-search init")
         sys.exit(1)
     except KeyboardInterrupt:
         print("\n\nInterrupted")

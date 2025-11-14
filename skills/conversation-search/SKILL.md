@@ -10,16 +10,16 @@ Find past conversations in your Claude Code history and get the commands to resu
 
 ## Prerequisites & Auto-Installation
 
-The skill requires the `conversation-search` CLI tool (v0.4.0+ minimum).
+The skill requires the `cc-conversation-search` CLI tool (v0.4.0+ minimum).
 
 **IMPORTANT: Always upgrade to latest when skill activates**
 
 ```bash
 # Check if installed
-if command -v conversation-search &> /dev/null; then
+if command -v cc-conversation-search &> /dev/null; then
     # Already installed - upgrade to latest to match plugin version
     uv tool upgrade cc-conversation-search 2>/dev/null || pip install --upgrade cc-conversation-search
-    echo "Upgraded to: $(conversation-search --version)"
+    echo "Upgraded to: $(cc-conversation-search --version)"
 else
     echo "Not installed - installing now..."
 fi
@@ -39,7 +39,7 @@ else
 fi
 
 # Initialize database
-conversation-search init --days 7
+cc-conversation-search init --days 7
 ```
 
 **If installation fails**, guide the user:
@@ -52,12 +52,12 @@ Install it manually:
   pip install --user cc-conversation-search
 
 Then initialize:
-  conversation-search init
+  cc-conversation-search init
 ```
 
 **After installation, verify:**
 ```bash
-conversation-search --version  # Should show 0.4.0 or higher
+cc-conversation-search --version  # Should show 0.4.0 or higher
 ```
 
 **Do not attempt search** until installation is confirmed.
@@ -86,7 +86,7 @@ Search Progress:
 
 **IMPORTANT**: Always run index before search to ensure fresh data:
 ```bash
-conversation-search index --days 7 --quiet
+cc-conversation-search index --days 7 --quiet
 ```
 
 This is instant (no AI calls) and ensures you're searching the latest conversations. Use --quiet for minimal output.
@@ -95,7 +95,7 @@ This is instant (no AI calls) and ensures you're searching the latest conversati
 
 Run focused search with time scope:
 ```bash
-conversation-search search "query terms" --days 14 --json
+cc-conversation-search search "query terms" --days 14 --json
 ```
 
 Parse JSON. **If clear matches** → skip to Level 4.
@@ -103,7 +103,7 @@ Parse JSON. **If clear matches** → skip to Level 4.
 ### Level 2: Broader Search
 
 If Level 1 yields no good matches:
-- Remove time filter: `conversation-search search "query" --json`
+- Remove time filter: `cc-conversation-search search "query" --json`
 - Try alternative keywords (e.g., "auth" vs "authentication")
 - Try broader terms (e.g., "database" vs "postgres migration")
 
@@ -115,14 +115,14 @@ Only escalate here if Levels 1-2 failed:
 
 1. List recent conversations:
    ```bash
-   conversation-search list --days 30 --json
+   cc-conversation-search list --days 30 --json
    ```
 
 2. Read conversation summaries from JSON to identify promising ones
 
 3. Get conversation tree for promising sessions:
    ```bash
-   conversation-search tree <SESSION_ID> --json
+   cc-conversation-search tree <SESSION_ID> --json
    ```
 
 4. Manually read message summaries in tree to find relevant content
@@ -155,29 +155,29 @@ Include:
 
 Optionally offer context expansion:
 ```bash
-conversation-search context <UUID> --json
+cc-conversation-search context <UUID> --json
 ```
 
 **If not found after all 3 levels:**
 - State clearly: "No matching conversations found after exhaustive search"
-- Suggest: `conversation-search index --days 90` to reindex older history
+- Suggest: `cc-conversation-search index --days 90` to reindex older history
 - Acknowledge: "The conversation may not exist or may be older than indexed range"
 
 ## Error Handling
 
 **Tool not installed:**
 ```bash
-which conversation-search
+which cc-conversation-search
 ```
 If not found:
 1. Install: `uv tool install cc-conversation-search` or `pip install cc-conversation-search`
-2. Initialize: `conversation-search init`
+2. Initialize: `cc-conversation-search init`
 3. **Do not proceed** until confirmed installed
 
-Note: The package is `cc-conversation-search` but the command is `conversation-search`
+Note: The package name and command are both `cc-conversation-search`
 
 **Database not found:**
-User must run: `conversation-search init`
+User must run: `cc-conversation-search init`
 Creates `~/.conversation-search/index.db` and indexes last 7 days.
 
 **No results at Level 1 or 2:**
@@ -190,28 +190,28 @@ Only then report "no match" with reindexing suggestion.
 
 **Search:**
 ```bash
-conversation-search search "query" --days N --json
-conversation-search search "query" --json  # All time
+cc-conversation-search search "query" --days N --json
+cc-conversation-search search "query" --json  # All time
 ```
 
 **Context expansion:**
 ```bash
-conversation-search context <UUID> --json
+cc-conversation-search context <UUID> --json
 ```
 
 **List conversations:**
 ```bash
-conversation-search list --days 30 --json
+cc-conversation-search list --days 30 --json
 ```
 
 **Conversation tree:**
 ```bash
-conversation-search tree <SESSION_ID> --json
+cc-conversation-search tree <SESSION_ID> --json
 ```
 
 **Resume helper** (returns copy-pasteable commands):
 ```bash
-conversation-search resume <UUID>
+cc-conversation-search resume <UUID>
 ```
 
 **Always use `--json`** for structured output in search/context/list/tree.
@@ -226,9 +226,9 @@ User: "Find that conversation where we fixed the authentication bug"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `conversation-search index --days 7 --quiet`
-2. Run Level 1: `conversation-search search "authentication bug" --days 14 --json`
-3. If no matches, Level 2: `conversation-search search "auth" --json`
+1. Run Level 0 (JIT index): `cc-conversation-search index --days 7 --quiet`
+2. Run Level 1: `cc-conversation-search search "authentication bug" --days 14 --json`
+3. If no matches, Level 2: `cc-conversation-search search "auth" --json`
 4. If still no matches, Level 3 (list + tree exploration)
 5. When found, display session ID, project path, timestamp, and resume commands
 
@@ -238,8 +238,8 @@ User: "Did we ever discuss React hooks?"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `conversation-search index --days 7 --quiet`
-2. Run Level 1: `conversation-search search "react hooks" --days 30 --json`
+1. Run Level 0 (JIT index): `cc-conversation-search index --days 7 --quiet`
+2. Run Level 1: `cc-conversation-search search "react hooks" --days 30 --json`
 3. Display all matches with session IDs and project paths
 4. Show resume commands for each match
 
@@ -249,8 +249,8 @@ User: "I want to go back to where we started implementing the API"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `conversation-search index --days 7 --quiet`
-2. Search: `conversation-search search "implementing API" --json`
+1. Run Level 0 (JIT index): `cc-conversation-search index --days 7 --quiet`
+2. Search: `cc-conversation-search search "implementing API" --json`
 3. Display session ID and project path prominently
 4. Show exact resume commands
-5. Offer context if needed: `conversation-search context <UUID> --json`
+5. Offer context if needed: `cc-conversation-search context <UUID> --json`

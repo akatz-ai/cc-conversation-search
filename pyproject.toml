@@ -1,6 +1,6 @@
 [project]
 name = "cc-conversation-search"
-version = "0.4.3"
+version = "0.4.4"
 description = "Find and resume Claude Code conversations using smart hybrid extraction and JIT indexing"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [project.scripts]
-conversation-search = "conversation_search.cli:main"
+cc-conversation-search = "conversation_search.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/akatz-ai/cc-conversation-search"

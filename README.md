@@ -5,7 +5,7 @@ Find and resume past Claude Code conversations using smart hybrid extraction and
 ## Features
 
 - **Session Resumption**: Get exact commands to resume past conversations
-- **Unified CLI**: Single `conversation-search` command with intuitive subcommands
+- **Unified CLI**: Single `cc-conversation-search` command with intuitive subcommands
 - **Smart Extraction**: Hybrid indexing (full user content + smart assistant extraction)
 - **JIT Indexing**: Instant indexing before search (no AI calls, no delays)
 - **Progressive Exploration**: Simple search → broader search → manual exploration
@@ -20,7 +20,7 @@ Find and resume past Claude Code conversations using smart hybrid extraction and
 Install the complete plugin (skill + CLI tool instructions) directly in Claude Code:
 
 ```bash
-# Add plugin to marketplace
+# Add this repo's marketplace
 /plugin marketplace add akatz-ai/cc-conversation-search
 
 # Install the plugin
@@ -29,7 +29,7 @@ Install the complete plugin (skill + CLI tool instructions) directly in Claude C
 
 Then follow the installation instructions shown by Claude to:
 1. Install the CLI tool: `uv tool install cc-conversation-search`
-2. Initialize the database: `conversation-search init`
+2. Initialize the database: `cc-conversation-search init`
 
 ### Manual Installation
 
@@ -46,7 +46,7 @@ pip install cc-conversation-search
 #### 2. Initialize Database
 
 ```bash
-conversation-search init
+cc-conversation-search init
 ```
 
 This creates the database and indexes your last 7 days of conversations.
@@ -62,13 +62,16 @@ cp skills/conversation-search/* ~/.claude/skills/conversation-search/
 
 ```bash
 # Search for conversations (shows session ID and resume commands)
-conversation-search search "authentication bug"
+cc-conversation-search search "authentication bug"
 
 # Search with time filter
-conversation-search search "react hooks" --days 30
+cc-conversation-search search "react hooks" --days 30
 
 # Get resume commands for a specific message
-conversation-search resume <MESSAGE_UUID>
+cc-conversation-search resume <MESSAGE_UUID>
+
+# Use with uvx (no install needed)
+uvx cc-conversation-search search "query"
 ```
 
 ### Using with Claude Code Skill
@@ -84,42 +87,42 @@ Claude will show you the session ID, project path, and exact commands to resume 
 
 ## Command Reference
 
-### `conversation-search init`
+### `cc-conversation-search init`
 Initialize database and perform initial indexing
 ```bash
-conversation-search init [--days 7] [--no-extract] [--force]
+cc-conversation-search init [--days 7] [--no-extract] [--force]
 ```
 
-### `conversation-search index`
+### `cc-conversation-search index`
 JIT index conversations (instant, no AI calls)
 ```bash
-conversation-search index [--days N] [--all] [--no-extract]
+cc-conversation-search index [--days N] [--all] [--no-extract]
 ```
 
 **IMPORTANT**: The skill always runs `index` before `search` for fresh data.
 
-### `conversation-search search`
+### `cc-conversation-search search`
 Search conversations
 ```bash
-conversation-search search "query" [--days N] [--project PATH] [--content] [--json]
+cc-conversation-search search "query" [--days N] [--project PATH] [--content] [--json]
 ```
 
-### `conversation-search context`
+### `cc-conversation-search context`
 Get context around a specific message
 ```bash
-conversation-search context MESSAGE_UUID [--depth 5] [--content] [--json]
+cc-conversation-search context MESSAGE_UUID [--depth 5] [--content] [--json]
 ```
 
-### `conversation-search list`
+### `cc-conversation-search list`
 List recent conversations
 ```bash
-conversation-search list [--days 7] [--limit 20] [--json]
+cc-conversation-search list [--days 7] [--limit 20] [--json]
 ```
 
-### `conversation-search tree`
+### `cc-conversation-search tree`
 View conversation tree structure
 ```bash
-conversation-search tree SESSION_ID [--json]
+cc-conversation-search tree SESSION_ID [--json]
 ```
 
 ## Architecture
@@ -160,8 +163,8 @@ The included Skill allows Claude to search your conversation history automatical
 ```
 User: "Find that conversation where we started implementing the API"
 Claude: [Activates conversation-search Skill]
-        [Runs Level 0: conversation-search index --days 7]  (instant JIT index)
-        [Runs Level 1: conversation-search search "implementing API" --days 14 --json]
+        [Runs Level 0: cc-conversation-search index --days 7]  (instant JIT index)
+        [Runs Level 1: cc-conversation-search search "implementing API" --days 14 --json]
         [Finds match]
         [Displays session ID, project path, and resume commands]
 
@@ -184,10 +187,10 @@ See `skills/conversation-search/SKILL.md` for progressive search workflow and co
 All commands support `--json` flag:
 ```bash
 # Export search results
-conversation-search search "authentication" --json > auth_convs.json
+cc-conversation-search search "authentication" --json > auth_convs.json
 
 # Programmatic processing
-conversation-search list --days 30 --json | jq '.[] | .conversation_summary'
+cc-conversation-search list --days 30 --json | jq '.[] | .conversation_summary'
 ```
 
 ### Programmatic Use
@@ -264,7 +267,7 @@ conversation-search/
 
 **"Database not found" error:**
 ```bash
-conversation-search init
+cc-conversation-search init
 ```
 
 **"No conversations found":**
@@ -274,7 +277,7 @@ conversation-search init
 **Want to skip extraction and use raw content only:**
 ```bash
 # Store only raw content (even faster, but less optimized for search)
-conversation-search init --no-extract
+cc-conversation-search init --no-extract
 ```
 
 **Skill not activating:**
