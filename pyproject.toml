@@ -1,6 +1,6 @@
 [project]
 name = "cc-conversation-search"
-version = "0.4.7"
+version = "0.4.8"
 description = "Find and resume Claude Code conversations using smart hybrid extraction and JIT indexing"
 readme = "README.md"
 requires-python = ">=3.9"

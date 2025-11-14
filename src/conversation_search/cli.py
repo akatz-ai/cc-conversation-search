@@ -9,7 +9,7 @@ from pathlib import Path
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch, format_timestamp
 
-__version__ = "0.4.7"
+__version__ = "0.4.8"
 
 
 def cmd_init(args):

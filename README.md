@@ -6,8 +6,11 @@ Find and resume past Claude Code conversations using smart hybrid extraction and
 
 - **Session Resumption**: Get exact commands to resume past conversations
 - **Unified CLI**: Single `cc-conversation-search` command with intuitive subcommands
+- **Calendar Date Filtering**: Intuitive `--date yesterday`, `--since`, `--until` parameters
 - **Smart Extraction**: Hybrid indexing (full user content + smart assistant extraction)
 - **JIT Indexing**: Instant indexing before search (no AI calls, no delays)
+- **Local Timezone Display**: All timestamps shown in your local time
+- **Meta-Conversation Filtering**: Automatically excludes search tool usage from results
 - **Progressive Exploration**: Simple search → broader search → manual exploration
 - **Conversation Context**: Expand context incrementally around any message
 - **Claude Code Skill**: Integrated Skill that outputs session resumption commands
@@ -64,8 +67,16 @@ cp skills/conversation-search/* ~/.claude/skills/conversation-search/
 # Search for conversations (shows session ID and resume commands)
 cc-conversation-search search "authentication bug"
 
-# Search with time filter
-cc-conversation-search search "react hooks" --days 30
+# Search with calendar date filters
+cc-conversation-search search "react hooks" --date yesterday
+cc-conversation-search search "auth" --since 2025-11-10 --until 2025-11-13
+
+# List conversations by date
+cc-conversation-search list --date yesterday
+cc-conversation-search list --since "2025-11-01"
+
+# Traditional relative time filters still work
+cc-conversation-search search "query" --days 30
 
 # Get resume commands for a specific message
 cc-conversation-search resume <MESSAGE_UUID>
@@ -77,9 +88,20 @@ uvx cc-conversation-search search "query"
 ### Using with Claude Code Skill
 
 Once installed, ask Claude:
+
+**Topic-based queries:**
 - "Find that conversation where we discussed authentication"
 - "Locate the conversation about React hooks"
 - "What did we talk about regarding the database?"
+
+**Temporal queries (NEW in v0.4.8):**
+- "What did we work on yesterday?"
+- "Summarize today's conversations"
+- "Show me this week's work"
+
+**Hybrid queries:**
+- "Find yesterday's authentication work"
+- "Show recent Redis discussions"
 
 **Auto-Installation**: If the CLI tool isn't installed, the skill will automatically attempt to install it via `uv` or `pip`, then initialize the database. In most cases, everything "just works" after installing the plugin!
 
@@ -102,9 +124,18 @@ cc-conversation-search index [--days N] [--all] [--no-extract]
 **IMPORTANT**: The skill always runs `index` before `search` for fresh data.
 
 ### `cc-conversation-search search`
-Search conversations
+Search conversations with flexible date filtering
 ```bash
+# Traditional relative time
 cc-conversation-search search "query" [--days N] [--project PATH] [--content] [--json]
+
+# Calendar date filtering (v0.4.8+)
+cc-conversation-search search "query" --date yesterday [--json]
+cc-conversation-search search "query" --date 2025-11-13 [--json]
+cc-conversation-search search "query" --since 2025-11-10 --until 2025-11-13 [--json]
+
+# Date formats: YYYY-MM-DD, "yesterday", "today"
+# Note: --days cannot be combined with --date/--since/--until
 ```
 
 ### `cc-conversation-search context`
@@ -114,9 +145,14 @@ cc-conversation-search context MESSAGE_UUID [--depth 5] [--content] [--json]
 ```
 
 ### `cc-conversation-search list`
-List recent conversations
+List recent conversations with calendar date support
 ```bash
+# Traditional relative time
 cc-conversation-search list [--days 7] [--limit 20] [--json]
+
+# Calendar date filtering (v0.4.8+)
+cc-conversation-search list --date yesterday [--json]
+cc-conversation-search list --since 2025-11-10 --until today [--json]
 ```
 
 ### `cc-conversation-search tree`
@@ -152,30 +188,56 @@ cc-conversation-search tree SESSION_ID [--json]
 
 1. **Indexer**: Scans `~/.claude/projects/` for JSONL conversation files, parses tree structure
 2. **Smart Extraction**: Hybrid approach - full user content + first 500/last 200 chars for assistant
-3. **Search**: FTS5 full-text search over extracted content with conversation tree traversal
-4. **JIT Indexing**: Skill runs `index` before `search` for fresh data (instant, no AI calls)
+3. **Meta-Conversation Filtering**: Automatically detects and excludes conversations where Claude used the search tool (prevents search results pollution)
+4. **Search**: FTS5 full-text search over extracted content with conversation tree traversal
+5. **Calendar Date Filtering**: Intuitive date parameters (`--date yesterday`) using SQLite date functions
+6. **JIT Indexing**: Skill runs `index` before `search` for fresh data (instant, no AI calls)
+7. **Local Timezone Display**: All timestamps converted to your local timezone for readability
 
 ## Claude Code Skill
 
 The included Skill allows Claude to search your conversation history automatically.
 
 **Example usage:**
+
+**Topic-based query:**
 ```
 User: "Find that conversation where we started implementing the API"
 Claude: [Activates conversation-search Skill]
-        [Runs Level 0: cc-conversation-search index --days 7]  (instant JIT index)
-        [Runs Level 1: cc-conversation-search search "implementing API" --days 14 --json]
+        [Classifies as Topic query]
+        [Runs: cc-conversation-search search "implementing API" --days 14 --json]
         [Finds match]
         [Displays session ID, project path, and resume commands]
 
         Output:
         Session: abc-123-session-id
         Project: /home/user/projects/myproject
-        Time: 2025-11-13 22:50
+        Time: 2025-11-13 22:50 (local time)
 
         To resume:
           cd /home/user/projects/myproject
           claude --resume abc-123-session-id
+```
+
+**Temporal query (NEW in v0.4.8):**
+```
+User: "What did we work on yesterday?"
+Claude: [Activates conversation-search Skill]
+        [Classifies as Temporal query]
+        [Runs: cc-conversation-search list --date yesterday --json]
+        [Analyzes conversations by project]
+
+        Output:
+        Yesterday's work summary:
+
+        Project: /home/user/projects/api-service
+        - Implemented Redis caching layer
+        - Fixed authentication timeout bug
+        Session: def-456-session-id
+
+        Project: /home/user/projects/frontend
+        - Updated React components for new API
+        Session: ghi-789-session-id
 ```
 
 See `skills/conversation-search/SKILL.md` for progressive search workflow and complete documentation.
@@ -199,11 +261,22 @@ cc-conversation-search list --days 30 --json | jq '.[] | .conversation_summary'
 from conversation_search.core.search import ConversationSearch
 from conversation_search.core.indexer import ConversationIndexer
 
-# Search for messages
+# Search for messages with calendar date filtering
 search = ConversationSearch()
+
+# Traditional relative time
 results = search.search_conversations("authentication", days_back=7)
+
+# New calendar date filtering (v0.4.8+)
+results = search.search_conversations("authentication", date="yesterday")
+results = search.search_conversations("auth", since="2025-11-10", until="2025-11-13")
+
 for r in results:
-    print(f"{r['message_uuid']}: {r['summary']}")  # UUID for branching
+    print(f"{r['message_uuid']}: {r['summary']}")
+
+# List conversations by date
+convs = search.list_recent_conversations(date="yesterday")
+convs = search.list_recent_conversations(since="2025-11-10", until="today")
 
 # Index conversations
 indexer = ConversationIndexer()
@@ -250,15 +323,20 @@ conversation-search/
 │       ├── __init__.py
 │       ├── cli.py              # Unified CLI
 │       ├── core/
-│       │   ├── indexer.py      # Conversation indexing
-│       │   ├── search.py       # Search functionality
+│       │   ├── indexer.py      # Conversation indexing + meta-filtering
+│       │   ├── search.py       # Search functionality + date filtering
+│       │   ├── date_utils.py   # Calendar date parsing (v0.4.8+)
 │       │   └── summarization.py # Smart hybrid extraction
 │       └── data/
 │           └── schema.sql      # Database schema
 ├── skills/
 │   └── conversation-search/
-│       ├── SKILL.md           # Claude Code Skill with progressive workflow
+│       ├── SKILL.md           # Claude Code Skill with query classification
 │       └── REFERENCE.md       # Complete command reference
+├── tests/
+│   ├── test_date_utils.py     # Date parsing tests
+│   ├── test_date_filtering.py # Date filter integration tests
+│   └── test_search_pair_detection.py # Meta-filtering tests
 ├── pyproject.toml
 └── README.md
 ```
