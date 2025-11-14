@@ -4,12 +4,36 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Union
 
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch, format_timestamp
 
-__version__ = "0.4.10"
+__version__ = "0.4.11"
+
+
+def localize_timestamps(data: Any) -> Any:
+    """Recursively convert UTC ISO timestamps to local timezone"""
+    if isinstance(data, list):
+        return [localize_timestamps(item) for item in data]
+    elif isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            # Convert timestamp fields from UTC to local
+            if key in ('timestamp', 'first_message_at', 'last_message_at', 'indexed_at'):
+                if isinstance(value, str) and value.endswith('Z'):
+                    dt_utc = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    dt_local = dt_utc.astimezone()
+                    result[key] = dt_local.isoformat()
+                else:
+                    result[key] = value
+            else:
+                result[key] = localize_timestamps(value) if isinstance(value, (dict, list)) else value
+        return result
+    else:
+        return data
 
 
 def cmd_init(args):
@@ -128,7 +152,7 @@ def cmd_search(args):
         raise
 
     if args.json:
-        print(json.dumps([dict(r) for r in results], indent=2))
+        print(json.dumps(localize_timestamps([dict(r) for r in results]), indent=2))
         return
 
     if not results:
@@ -187,7 +211,7 @@ def cmd_context(args):
     )
 
     if args.json:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(localize_timestamps(result), indent=2))
         return
 
     print(f"Context for message: {args.uuid}\n")
@@ -248,7 +272,7 @@ def cmd_list(args):
     )
 
     if args.json:
-        print(json.dumps([dict(c) for c in convs], indent=2))
+        print(json.dumps(localize_timestamps([dict(c) for c in convs]), indent=2))
         return
 
     if not convs:
@@ -273,7 +297,7 @@ def cmd_tree(args):
     tree = search.get_conversation_tree(args.session_id)
 
     if args.json:
-        print(json.dumps(tree, indent=2))
+        print(json.dumps(localize_timestamps(tree), indent=2))
         return
 
     print(f"Conversation tree: {args.session_id}\n")
