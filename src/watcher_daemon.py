@@ -15,6 +15,8 @@ from typing import Dict, List, Set
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from summarization import MessageSummarizer, is_summarizer_conversation
+
 
 class ConversationWatcher(FileSystemEventHandler):
     """Watches conversation files and tracks unsummarized messages"""
@@ -24,8 +26,10 @@ class ConversationWatcher(FileSystemEventHandler):
         self.batch_size = batch_size
         self.pending_files: Set[Path] = set()
         self.last_process_time = time.time()
-        self.min_batch_interval = 30  # Wait at least 30s between batches
+        self.last_change_time = time.time()  # Track when last file change occurred
+        self.idle_threshold = 30  # Process if no changes for 30 seconds
         self.verbose = verbose
+        self.summarizer = MessageSummarizer(db_path=str(db_path))
 
     def on_modified(self, event):
         """Called when a file is modified"""
@@ -40,11 +44,7 @@ class ConversationWatcher(FileSystemEventHandler):
                 print(f"  📝 Detected change: {file_path.name}")
 
             self.pending_files.add(file_path)
-
-            # Check if we should process now
-            time_since_last = time.time() - self.last_process_time
-            if time_since_last >= self.min_batch_interval:
-                self.process_pending()
+            self.last_change_time = time.time()  # Update last change timestamp
 
     def get_unsummarized_messages(self, conv_file: Path) -> List[Dict]:
         """
@@ -52,13 +52,10 @@ class ConversationWatcher(FileSystemEventHandler):
 
         A message needs summarization if:
         1. It exists in the DB (has been indexed)
-        2. Its summary is just truncated content (not AI-generated)
+        2. Its summary is truncated or it's not marked as summarized
         """
         conn = sqlite3.connect(str(self.db_path), timeout=10.0)
-
-        # Enable WAL mode for concurrent access
         conn.execute("PRAGMA journal_mode=WAL")
-
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -110,149 +107,79 @@ class ConversationWatcher(FileSystemEventHandler):
             return []
 
         # Check which messages are in DB and need summarization
-        # A message needs summarization if its summary is truncated content
         unsummarized = []
 
         for msg in file_messages:
             cursor.execute("""
-                SELECT message_uuid, summary, full_content
+                SELECT message_uuid, summary, full_content, is_summarized
                 FROM messages
                 WHERE message_uuid = ?
             """, (msg['uuid'],))
 
             result = cursor.fetchone()
 
-            if result:
-                summary = result['summary']
-                full_content = result['full_content']
-
-                # Check if summary needs AI generation
-                # A message needs summarization if:
-                # 1. Summary is empty or very short (< 50 chars)
-                # 2. Summary is just tool markers like "[Tool: Bash]"
-                # 3. Summary is truncated content (ends with ... or is exactly 147-150 chars)
-                # 4. Summary equals the full content (no actual summarization happened)
-
-                is_truncated = (
-                    summary.endswith('...') or  # Explicit truncation marker
-                    (145 <= len(summary) <= 150 and len(full_content) > len(summary))  # Likely truncated by indexer
-                )
-
-                needs_summary = (
-                    len(summary) < 50 or  # Too short to be useful
-                    summary.startswith('[Tool') or  # Just tool markers
-                    is_truncated or  # Truncated by indexer
-                    summary == full_content  # No summarization happened
-                )
-
-                if needs_summary and len(full_content) > 50:
-                    # Only summarize if there's actually content to summarize
+            if result and not result['is_summarized']:
+                # Message exists but not summarized yet
+                should_summarize, reason = self.summarizer.needs_summarization(msg)
+                if should_summarize:
                     unsummarized.append(msg)
 
         conn.close()
         return unsummarized
-
-    def call_haiku_summarizer(self, messages: List[Dict]) -> Dict:
-        """Call Claude CLI with Haiku to generate summaries"""
-        messages_json = json.dumps([{
-            'uuid': m['uuid'],
-            'message_type': m['message_type'],
-            'content': m['content'][:2000]
-        } for m in messages], indent=2)
-
-        prompt = f"""You are a summarization assistant. Generate concise summaries for conversation messages.
-
-Messages to summarize:
-{messages_json}
-
-For each message, create a 1-2 sentence summary (max 150 characters) that captures the main point.
-- For user messages: capture the question, request, or action
-- For assistant messages: capture the key action, answer, or explanation
-- Use active voice and clear language
-
-Output ONLY valid JSON in this exact format:
-{{
-  "summaries": [
-    {{"uuid": "message-uuid", "message_type": "user|assistant", "summary": "Brief summary here"}},
-    ...
-  ]
-}}
-
-JSON output:"""
-
-        try:
-            result = subprocess.run(
-                ['claude', '--model', 'haiku'],
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-
-            if result.returncode != 0:
-                print(f"Error calling Claude: {result.stderr}", file=sys.stderr)
-                return {"summaries": []}
-
-            output = result.stdout.strip()
-
-            # Extract JSON
-            json_start = output.find('{')
-            json_end = output.rfind('}') + 1
-
-            if json_start >= 0 and json_end > json_start:
-                json_str = output[json_start:json_end]
-                return json.loads(json_str)
-            else:
-                return {"summaries": []}
-
-        except Exception as e:
-            print(f"Error calling Haiku: {e}", file=sys.stderr)
-            return {"summaries": []}
-
-    def update_summaries(self, summaries: List[Dict]) -> int:
-        """Update database with new summaries"""
-        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
-
-        # Enable WAL mode for concurrent access
-        conn.execute("PRAGMA journal_mode=WAL")
-
-        cursor = conn.cursor()
-
-        updated = 0
-        for summary_data in summaries:
-            uuid = summary_data.get('uuid')
-            summary = summary_data.get('summary')
-
-            if not uuid or not summary:
-                continue
-
-            cursor.execute("""
-                UPDATE messages
-                SET summary = ?
-                WHERE message_uuid = ?
-            """, (summary, uuid))
-
-            if cursor.rowcount > 0:
-                updated += 1
-
-        conn.commit()
-        conn.close()
-
-        return updated
 
     def process_pending(self):
         """Process pending files and summarize messages"""
         if not self.pending_files:
             return
 
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Processing {len(self.pending_files)} updated conversations...")
+        time_since_change = time.time() - self.last_change_time
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Processing {len(self.pending_files)} updated conversations (idle for {int(time_since_change)}s)...")
 
-        all_unsummarized = []
+        # Step 1: Re-index modified conversations to catch new messages
+        from indexer import ConversationIndexer
+        indexer = ConversationIndexer(db_path=str(self.db_path))
 
-        # Collect unsummarized messages from all pending files
         for conv_file in list(self.pending_files):
             if not conv_file.exists():
                 self.pending_files.remove(conv_file)
+                continue
+
+            try:
+                # Skip summarizer conversations
+                with open(conv_file, 'r') as f:
+                    messages = []
+                    for line in f:
+                        try:
+                            data = json.loads(line.strip())
+                            if 'uuid' in data:
+                                messages.append({'content': str(data), 'message_type': 'user'})
+                        except:
+                            pass
+
+                if is_summarizer_conversation(conv_file, messages):
+                    self.pending_files.remove(conv_file)
+                    continue
+
+                # Index conversation (adds new messages to DB without AI summaries)
+                # Suppress stdout to avoid noise
+                import sys, io
+                old_stdout = sys.stdout
+                sys.stdout = io.StringIO()
+                try:
+                    indexer.index_conversation(conv_file, summarize=False)
+                finally:
+                    sys.stdout = old_stdout
+
+            except Exception as e:
+                print(f"  Error indexing {conv_file.name}: {e}")
+
+        indexer.close()
+
+        # Step 2: Collect unsummarized messages from indexed conversations
+        all_unsummarized = []
+
+        for conv_file in list(self.pending_files):
+            if not conv_file.exists():
                 continue
 
             try:
@@ -272,17 +199,16 @@ JSON output:"""
 
         # Batch summarization
         total_updated = 0
-        batch_size = 20  # Process 20 messages at a time
+        batch_size = 20
 
         for i in range(0, len(all_unsummarized), batch_size):
             batch = all_unsummarized[i:i+batch_size]
             print(f"  Calling Haiku to summarize batch of {len(batch)} messages...")
 
-            result = self.call_haiku_summarizer(batch)
-            summaries = result.get('summaries', [])
+            summaries = self.summarizer.summarize_batch(batch)
 
             if summaries:
-                updated = self.update_summaries(summaries)
+                updated = self.summarizer.update_database(summaries)
                 total_updated += updated
                 print(f"    ✓ Updated {updated} summaries")
             else:
@@ -293,26 +219,43 @@ JSON output:"""
 
 
 def ensure_indexed():
-    """Run the indexer to ensure all messages are in the DB"""
-    script_dir = Path(__file__).parent
-    indexer = script_dir / "indexer.py"
+    """Index recently modified conversations to catch up after watcher downtime"""
+    from indexer import ConversationIndexer
 
-    print("Running initial indexing (without summaries)...")
+    print("Catching up on recently modified conversations...")
     try:
-        result = subprocess.run(
-            [sys.executable, str(indexer), '--days', '1', '--no-summarize'],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
+        indexer = ConversationIndexer()
 
-        if result.returncode == 0:
-            print("✓ Initial indexing complete")
+        # Only index conversations modified in the last hour (catchup window)
+        files = indexer.scan_conversations(days_back=None)
+
+        # Filter to only files modified in last hour
+        import time
+        cutoff = time.time() - 3600  # 1 hour ago
+        recent_files = [f for f in files if f.stat().st_mtime > cutoff]
+
+        if recent_files:
+            print(f"  Indexing {len(recent_files)} recently modified conversations...")
+            import sys, io
+            for conv_file in recent_files:
+                try:
+                    # Suppress verbose indexer output
+                    old_stdout = sys.stdout
+                    sys.stdout = io.StringIO()
+                    try:
+                        indexer.index_conversation(conv_file, summarize=False)
+                    finally:
+                        sys.stdout = old_stdout
+                except Exception as e:
+                    print(f"  Error indexing {conv_file.name}: {e}")
+            print("✓ Catchup indexing complete")
         else:
-            print(f"Warning: Indexer had issues:\n{result.stderr}")
+            print("✓ No recent conversations to catch up on")
+
+        indexer.close()
 
     except Exception as e:
-        print(f"Error running indexer: {e}")
+        print(f"Error during catchup: {e}")
 
 
 def main():
@@ -344,7 +287,7 @@ def main():
 
     # Setup file watcher
     print(f"\nWatching: {projects_dir}")
-    print("Batch size: 10 messages (or 30s delay)")
+    print("Idle timeout: 30 seconds (processes when no new changes for 30s)")
     if args.verbose:
         print("Verbose mode: ON (will print file changes as they happen)")
     print("Press Ctrl+C to stop\n")
@@ -358,10 +301,10 @@ def main():
         while True:
             time.sleep(5)
 
-            # Periodically process if enough time has passed
+            # Process if: pending files exist AND no new changes for idle_threshold seconds
             if event_handler.pending_files:
-                time_since_last = time.time() - event_handler.last_process_time
-                if time_since_last >= event_handler.min_batch_interval:
+                time_since_last_change = time.time() - event_handler.last_change_time
+                if time_since_last_change >= event_handler.idle_threshold:
                     event_handler.process_pending()
 
     except KeyboardInterrupt:

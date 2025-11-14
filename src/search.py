@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
+from summarization import MessageSummarizer
+
 
 class ConversationSearch:
     def __init__(self, db_path: str = "~/.claude-finder/index.db"):
@@ -352,9 +354,9 @@ class ConversationSearch:
             # Get messages for this conversation
             cursor.execute("""
                 SELECT message_uuid, timestamp, message_type, summary,
-                       is_sidechain, project_path
+                       is_sidechain, project_path, is_tool_noise
                 FROM messages
-                WHERE session_id = ?
+                WHERE session_id = ? AND is_tool_noise = FALSE
                 ORDER BY timestamp DESC
                 LIMIT ?
             """, (conv['session_id'], max_messages_per_conv))
@@ -446,6 +448,14 @@ def main():
                        help='Load recent context for Claude to read (NEW: context-first mode)')
     parser.add_argument('--full', metavar='UUID', nargs='+',
                        help='Fetch full content for message UUIDs')
+    parser.add_argument('--summarize', metavar='N', type=int, nargs='?', const=-1,
+                       help='Summarize unsummarized messages (optionally limit to N messages)')
+    parser.add_argument('--inspect', metavar='N', type=int, nargs='?', const=10,
+                       help='Inspect last N messages with metadata (default: 10)')
+    parser.add_argument('--cleanup', action='store_true',
+                       help='Clean up: mark tool noise and remove summarizer conversations')
+    parser.add_argument('--force', action='store_true',
+                       help='Force re-summarization even if already summarized')
     parser.add_argument('--content', action='store_true',
                        help='Show full message content')
     parser.add_argument('--json', action='store_true',
@@ -458,7 +468,249 @@ def main():
     search = ConversationSearch(db_path=args.db)
 
     try:
-        if args.load:
+        if args.cleanup:
+            # Clean up database: mark tool noise and remove summarizer conversations
+            from summarization import MessageSummarizer, is_summarizer_conversation
+
+            print("🧹 Cleaning up database...")
+            summarizer = MessageSummarizer(db_path=args.db)
+            cursor = search.conn.cursor()
+
+            # Step 1: Mark tool noise
+            print("\n1️⃣ Marking tool noise messages...")
+            cursor.execute("SELECT message_uuid, message_type, full_content as content FROM messages WHERE is_tool_noise = FALSE")
+            messages = [dict(row) for row in cursor.fetchall()]
+
+            tool_noise_uuids = []
+            for msg in messages:
+                if summarizer.is_tool_noise(msg):
+                    tool_noise_uuids.append(msg['message_uuid'])
+
+            if tool_noise_uuids:
+                summarizer.mark_tool_noise(tool_noise_uuids)
+                print(f"   ✓ Marked {len(tool_noise_uuids)} messages as tool noise")
+            else:
+                print(f"   ✓ No new tool noise found")
+
+            # Step 2: Find and remove summarizer conversations
+            print("\n2️⃣ Finding summarizer conversations...")
+            cursor.execute("""
+                SELECT DISTINCT session_id, conversation_file
+                FROM conversations
+            """)
+            conversations = [dict(row) for row in cursor.fetchall()]
+
+            summarizer_sessions = []
+            for conv in conversations:
+                conv_file = Path(conv['conversation_file'])
+                if not conv_file.exists():
+                    continue
+
+                # Read messages from this conversation
+                try:
+                    from indexer import ConversationIndexer
+                    indexer = ConversationIndexer(db_path=args.db)
+                    _, messages = indexer.parse_conversation_file(conv_file)
+
+                    if is_summarizer_conversation(conv_file, messages):
+                        summarizer_sessions.append(conv['session_id'])
+                        print(f"   Found summarizer conversation: {conv_file.name}")
+                except Exception as e:
+                    continue
+
+            if summarizer_sessions:
+                # Delete summarizer conversations
+                for session_id in summarizer_sessions:
+                    cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+                    cursor.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
+
+                search.conn.commit()
+                print(f"   ✓ Removed {len(summarizer_sessions)} summarizer conversations")
+            else:
+                print(f"   ✓ No summarizer conversations found")
+
+            # Step 3: Show stats
+            print("\n📊 Final stats:")
+            cursor.execute("SELECT COUNT(*) FROM messages")
+            total_messages = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM messages WHERE is_tool_noise = TRUE")
+            tool_noise_count = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM messages WHERE is_summarized = TRUE")
+            summarized_count = cursor.fetchone()[0]
+
+            print(f"   Total messages: {total_messages}")
+            print(f"   Tool noise: {tool_noise_count} ({100*tool_noise_count/total_messages:.1f}%)")
+            print(f"   Summarized: {summarized_count} ({100*summarized_count/total_messages:.1f}%)")
+            print("\n✓ Cleanup complete!")
+
+        elif args.inspect is not None:
+            # Inspect messages with metadata
+            cursor = search.conn.cursor()
+
+            limit = args.inspect if args.inspect > 0 else 10
+
+            sql = """
+                SELECT
+                    message_uuid,
+                    message_type,
+                    timestamp,
+                    is_summarized,
+                    is_tool_noise,
+                    summary_method,
+                    summary,
+                    SUBSTR(full_content, 1, 100) as content_preview
+                FROM messages
+            """
+
+            # Get the most recent N messages, then reverse for chronological display
+            if args.days:
+                cutoff = (datetime.now() - timedelta(days=args.days)).isoformat()
+                sql += " WHERE timestamp >= ?"
+                cursor.execute(sql + " ORDER BY timestamp DESC LIMIT ?", (cutoff, limit))
+            else:
+                cursor.execute(sql + " ORDER BY timestamp DESC LIMIT ?", (limit,))
+
+            messages = [dict(row) for row in cursor.fetchall()]
+            messages.reverse()  # Oldest to newest for chronological display
+
+            if not messages:
+                print("No messages found")
+                return
+
+            # Print header
+            print("\n" + "="*155)
+            print(f"{'Time':<8} {'UUID':<10} {'Type':<4} {'Sum':<4} {'Noise':<5} {'Method':<8} {'Summary':<50} {'Content Preview':<40}")
+            print("="*155)
+
+            # Print messages
+            for msg in messages:
+                # Format timestamp
+                ts = datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))
+                time_str = ts.strftime('%H:%M:%S')
+
+                uuid_short = msg['message_uuid'][:8]
+                msg_type = "👤" if msg['message_type'] == 'user' else "🤖"
+                is_sum = "✓" if msg['is_summarized'] else "✗"
+                is_noise = "🔇" if msg['is_tool_noise'] else ""
+
+                method = msg['summary_method'] or 'none'
+                method_short = {
+                    'ai_generated': 'ai',
+                    'truncation': 'trunc',
+                    'too_short': 'short',
+                    'none': '-'
+                }.get(method, method[:8])
+
+                summary = (msg['summary'] or '')[:50]
+                content = (msg['content_preview'] or '').replace('\n', ' ')[:40]
+
+                print(f"{time_str:<8} {uuid_short:<10} {msg_type:<4} {is_sum:<4} {is_noise:<5} {method_short:<8} {summary:<50} {content:<40}")
+
+            print("="*155)
+            print(f"\nShowing {len(messages)} messages")
+
+            # Stats
+            summarized = sum(1 for m in messages if m['is_summarized'])
+            ai_generated = sum(1 for m in messages if m['summary_method'] == 'ai_generated')
+            tool_noise = sum(1 for m in messages if m['is_tool_noise'])
+
+            print(f"Stats: {summarized}/{len(messages)} summarized | {ai_generated} AI-generated | {tool_noise} tool noise\n")
+
+        elif args.summarize is not None:
+            # Retroactive batch summarization
+            summarizer = MessageSummarizer(db_path=args.db)
+
+            print("🔍 Finding unsummarized messages...")
+
+            # Query for unsummarized messages
+            cursor = search.conn.cursor()
+
+            if args.force:
+                # Force re-summarization
+                sql = """
+                    SELECT message_uuid as uuid, message_type, full_content as content
+                    FROM messages
+                    WHERE 1=1
+                """
+            else:
+                # Only unsummarized messages
+                sql = """
+                    SELECT message_uuid as uuid, message_type, full_content as content
+                    FROM messages
+                    WHERE is_summarized = FALSE AND is_tool_noise = FALSE
+                """
+
+            if args.days:
+                cutoff = (datetime.now() - timedelta(days=args.days)).isoformat()
+                sql += " AND timestamp >= ?"
+                cursor.execute(sql + " ORDER BY timestamp DESC", (cutoff,))
+            else:
+                cursor.execute(sql + " ORDER BY timestamp DESC")
+
+            messages = [dict(row) for row in cursor.fetchall()]
+
+            # Limit if specified
+            if args.summarize > 0:
+                messages = messages[:args.summarize]
+
+            if not messages:
+                print("✓ No messages need summarization")
+                return
+
+            print(f"Found {len(messages)} messages to summarize")
+
+            # Filter by summarization needs
+            needs_summary = []
+            tool_noise_uuids = []
+            too_short_uuids = []
+
+            for msg in messages:
+                should_summarize, reason = summarizer.needs_summarization(msg)
+
+                if reason == 'tool_noise':
+                    tool_noise_uuids.append(msg['uuid'])
+                elif reason == 'too_short':
+                    too_short_uuids.append(msg['uuid'])
+                elif should_summarize or args.force:
+                    needs_summary.append(msg)
+
+            # Mark metadata
+            if tool_noise_uuids:
+                summarizer.mark_tool_noise(tool_noise_uuids)
+                print(f"  Marked {len(tool_noise_uuids)} messages as tool noise")
+
+            if too_short_uuids:
+                summarizer.mark_too_short(too_short_uuids)
+                print(f"  Marked {len(too_short_uuids)} messages as too short")
+
+            # Batch summarize
+            if needs_summary:
+                print(f"\n📝 Batch summarizing {len(needs_summary)} messages...")
+                batch_size = 20
+                total_updated = 0
+
+                for i in range(0, len(needs_summary), batch_size):
+                    batch = needs_summary[i:i+batch_size]
+                    batch_num = i//batch_size + 1
+                    total_batches = (len(needs_summary)-1)//batch_size + 1
+
+                    print(f"  Processing batch {batch_num}/{total_batches} ({len(batch)} messages)...")
+
+                    summaries = summarizer.summarize_batch(batch)
+                    if summaries:
+                        updated = summarizer.update_database(summaries)
+                        total_updated += updated
+                        print(f"    ✓ Updated {updated} summaries")
+                    else:
+                        print(f"    ✗ No summaries generated")
+
+                print(f"\n✓ Summarization complete! Updated {total_updated}/{len(needs_summary)} messages")
+            else:
+                print("✓ All messages already summarized")
+
+        elif args.load:
             # NEW: Context-first mode
             context = search.load_context(
                 days_back=args.days,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Claude Finder Indexer
-Scans ~/.claude/projects and indexes conversations with Haiku-generated summaries
+Scans ~/.claude/projects and indexes conversations with batch AI summarization
 """
 
 import json
@@ -11,6 +11,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+from summarization import MessageSummarizer, is_summarizer_conversation
+
 
 class ConversationIndexer:
     def __init__(self, db_path: str = "~/.claude-finder/index.db"):
@@ -18,13 +20,14 @@ class ConversationIndexer:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path))
 
-        # Enable WAL mode for concurrent access (prevents corruption)
+        # Enable WAL mode for concurrent access
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
 
         self.conn.row_factory = sqlite3.Row
         self._init_db()
-        self._anthropic_client = None  # Lazy-loaded when needed
+        self.summarizer = MessageSummarizer(db_path=str(self.db_path))
+        self._summarizer_project_hash = None
 
     def _init_db(self):
         """Initialize database with schema"""
@@ -33,53 +36,31 @@ class ConversationIndexer:
             self.conn.executescript(f.read())
         self.conn.commit()
 
-    def _get_anthropic_client(self):
-        """Lazy-load Anthropic client with API key"""
-        if self._anthropic_client is not None:
-            return self._anthropic_client
+    def _get_summarizer_project_hash(self) -> Optional[str]:
+        """Get the project hash for summarizer workspace by detection"""
+        if self._summarizer_project_hash:
+            return self._summarizer_project_hash
 
-        try:
-            import anthropic
-        except ImportError:
+        projects_dir = Path.home() / ".claude" / "projects"
+        if not projects_dir.exists():
             return None
 
-        # Try to get API key from multiple sources
-        api_key = None
+        # Look for directories with summarizer conversations
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
 
-        # 1. Environment variable
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
-
-        # 2. Config file
-        if not api_key:
-            config_path = Path.home() / ".claude-finder" / "config.json"
-            if config_path.exists():
+            for conv_file in list(project_dir.glob("*.jsonl"))[:5]:  # Check first 5
                 try:
-                    with open(config_path) as f:
-                        config = json.load(f)
-                        api_key = config.get('anthropic_api_key')
+                    _, messages = self.parse_conversation_file(conv_file)
+                    if is_summarizer_conversation(conv_file, messages):
+                        self._summarizer_project_hash = project_dir.name
+                        print(f"  Detected summarizer project hash: {project_dir.name}")
+                        return project_dir.name
                 except:
-                    pass
+                    continue
 
-        # 3. User's shell profile (if set)
-        if not api_key:
-            try:
-                # Try reading from shell config
-                anthropic_key_file = Path.home() / ".anthropic_key"
-                if anthropic_key_file.exists():
-                    with open(anthropic_key_file) as f:
-                        api_key = f.read().strip()
-            except:
-                pass
-
-        if not api_key:
-            return None
-
-        try:
-            self._anthropic_client = anthropic.Anthropic(api_key=api_key)
-            return self._anthropic_client
-        except Exception as e:
-            print(f"  Warning: Error creating Anthropic client: {e}")
-            return None
+        return None
 
     def scan_conversations(self, days_back: Optional[int] = 1) -> List[Path]:
         """
@@ -100,10 +81,17 @@ class ConversationIndexer:
         if days_back is not None:
             cutoff_time = datetime.now() - timedelta(days=days_back)
 
+        # Get summarizer hash
+        summarizer_hash = self._get_summarizer_project_hash()
+
         conversation_files = []
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
+                continue
+
+            # Skip summarizer project
+            if summarizer_hash and project_dir.name == summarizer_hash:
                 continue
 
             for conv_file in project_dir.glob("*.jsonl"):
@@ -157,7 +145,6 @@ class ConversationIndexer:
                                     if block.get('type') == 'text':
                                         text_parts.append(block.get('text', ''))
                                     elif block.get('type') == 'thinking':
-                                        # Skip thinking blocks for summaries
                                         continue
                                     elif block.get('type') == 'tool_use':
                                         tool_name = block.get('name', 'unknown')
@@ -182,58 +169,6 @@ class ConversationIndexer:
 
         return conversation_meta, messages
 
-    def summarize_message(self, message: Dict) -> str:
-        """
-        Use Haiku to generate a 1-2 sentence summary of a message
-        """
-        content = message['content']
-        message_type = message['message_type']
-
-        # Don't summarize very short messages
-        if len(content) < 50:
-            return content[:100]
-
-        # Truncate very long messages for summarization (Haiku context limit)
-        content_snippet = content[:3000]
-
-        # Try to use Haiku via Anthropic API
-        client = self._get_anthropic_client()
-
-        if client is None:
-            # Fallback: use first 150 chars
-            return content[:147] + "..." if len(content) > 150 else content
-
-        prompt = f"""Summarize this {message_type} message in 1-2 concise sentences (max 150 chars). Focus on the main action, question, or response.
-
-Message:
-{content_snippet}
-
-Summary:"""
-
-        try:
-            response = client.messages.create(
-                model="claude-haiku-4-20250514",
-                max_tokens=100,
-                temperature=0.3,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
-
-            summary = response.content[0].text.strip()
-
-            # Ensure it's not too long
-            if len(summary) > 200:
-                summary = summary[:197] + "..."
-
-            return summary
-
-        except Exception as e:
-            print(f"  Warning: Haiku summarization failed: {e}")
-            # Fallback
-            return content[:147] + "..." if len(content) > 150 else content
-
     def calculate_depth(self, messages: List[Dict], parent_map: Dict[str, str]) -> Dict[str, int]:
         """Calculate depth of each message from root"""
         depths = {}
@@ -255,7 +190,7 @@ Summary:"""
         return depths
 
     def index_conversation(self, file_path: Path, summarize: bool = True):
-        """Index a single conversation file"""
+        """Index a single conversation file with batch summarization"""
         print(f"Indexing: {file_path}")
 
         # Parse file
@@ -263,6 +198,11 @@ Summary:"""
 
         if not messages:
             print(f"  No messages found in {file_path}")
+            return
+
+        # Skip summarizer conversations
+        if is_summarizer_conversation(file_path, messages):
+            print(f"  ⏭️  Skipping automated summarizer conversation")
             return
 
         # Extract project path from file location
@@ -290,8 +230,6 @@ Summary:"""
 
         if existing:
             print(f"  Already indexed at {existing['indexed_at']}, updating...")
-            # TODO: Implement incremental updates
-            # For now, delete and re-index
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             cursor.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
 
@@ -317,13 +255,23 @@ Summary:"""
             len(messages)
         ))
 
-        # Insert messages with summaries
-        for i, message in enumerate(messages):
-            if summarize and i % 10 == 0:
-                print(f"  Processing message {i+1}/{len(messages)}...")
+        # Batch process messages for summarization
+        needs_summary = []
+        tool_noise_uuids = []
+        too_short_uuids = []
 
-            summary = self.summarize_message(message) if summarize else message['content'][:150]
+        for message in messages:
+            should_summarize, reason = self.summarizer.needs_summarization(message)
 
+            if reason == 'tool_noise':
+                tool_noise_uuids.append(message['uuid'])
+            elif reason == 'too_short':
+                too_short_uuids.append(message['uuid'])
+            elif should_summarize and summarize:
+                needs_summary.append(message)
+
+        # Insert all messages first (without summaries for now)
+        for message in messages:
             cursor.execute("""
                 INSERT INTO messages (
                     message_uuid, session_id, parent_uuid, is_sidechain,
@@ -340,12 +288,39 @@ Summary:"""
                 message['message_type'],
                 project_path,
                 str(file_path),
-                summary,
+                message['content'][:150] if len(message['content']) < 150 else message['content'][:147] + "...",
                 message['content']
             ))
 
         self.conn.commit()
-        print(f"  ✓ Indexed {len(messages)} messages")
+
+        # Mark tool noise
+        if tool_noise_uuids:
+            self.summarizer.mark_tool_noise(tool_noise_uuids)
+            print(f"  Marked {len(tool_noise_uuids)} messages as tool noise")
+
+        # Mark too short
+        if too_short_uuids:
+            self.summarizer.mark_too_short(too_short_uuids)
+
+        # Batch summarize
+        if summarize and needs_summary:
+            print(f"  Batch summarizing {len(needs_summary)} messages...")
+            batch_size = 20
+
+            total_updated = 0
+            for i in range(0, len(needs_summary), batch_size):
+                batch = needs_summary[i:i+batch_size]
+                print(f"    Processing batch {i//batch_size + 1}/{(len(needs_summary)-1)//batch_size + 1}...")
+
+                summaries = self.summarizer.summarize_batch(batch)
+                if summaries:
+                    updated = self.summarizer.update_database(summaries)
+                    total_updated += updated
+
+            print(f"  ✓ Summarized {total_updated}/{len(needs_summary)} messages")
+        else:
+            print(f"  ✓ Indexed {len(messages)} messages (no summarization)")
 
     def index_all(self, days_back: Optional[int] = 1, summarize: bool = True):
         """Index all conversations from the last N days"""
@@ -377,7 +352,7 @@ def main():
     parser.add_argument('--all', action='store_true',
                        help='Index all conversations regardless of age')
     parser.add_argument('--no-summarize', action='store_true',
-                       help='Skip Haiku summarization (faster but less useful)')
+                       help='Skip AI summarization (faster but less useful)')
     parser.add_argument('--db', default='~/.claude-finder/index.db',
                        help='Path to SQLite database')
 
