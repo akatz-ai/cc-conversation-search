@@ -9,7 +9,7 @@ from pathlib import Path
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch
 
-__version__ = "0.4.6"
+__version__ = "0.4.7"
 
 
 def cmd_init(args):
@@ -98,6 +98,19 @@ def cmd_index(args):
 
 def cmd_search(args):
     """Search conversations"""
+    # Auto-index before searching to ensure fresh data
+    if not getattr(args, 'no_index', False):
+        indexer = ConversationIndexer(quiet=True)
+        days_to_index = args.days if args.days else 7
+        files = indexer.scan_conversations(days_back=days_to_index)
+        if files:
+            for conv_file in files:
+                try:
+                    indexer.index_conversation(conv_file, summarize=True)
+                except Exception:
+                    pass  # Silent failures for auto-indexing
+        indexer.close()
+
     search = ConversationSearch()
 
     try:
@@ -151,6 +164,18 @@ def cmd_search(args):
 
 def cmd_context(args):
     """Get context around a message"""
+    # Auto-index recent conversations to ensure fresh data
+    if not getattr(args, 'no_index', False):
+        indexer = ConversationIndexer(quiet=True)
+        files = indexer.scan_conversations(days_back=7)
+        if files:
+            for conv_file in files:
+                try:
+                    indexer.index_conversation(conv_file, summarize=True)
+                except Exception:
+                    pass  # Silent failures for auto-indexing
+        indexer.close()
+
     search = ConversationSearch()
 
     result = search.get_conversation_context(
@@ -197,6 +222,18 @@ def cmd_context(args):
 
 def cmd_list(args):
     """List recent conversations"""
+    # Auto-index before listing to ensure fresh data
+    if not getattr(args, 'no_index', False):
+        indexer = ConversationIndexer(quiet=True)
+        files = indexer.scan_conversations(days_back=args.days)
+        if files:
+            for conv_file in files:
+                try:
+                    indexer.index_conversation(conv_file, summarize=True)
+                except Exception:
+                    pass  # Silent failures for auto-indexing
+        indexer.close()
+
     search = ConversationSearch()
 
     convs = search.list_recent_conversations(days_back=args.days, limit=args.limit)
@@ -312,6 +349,7 @@ def main():
     search_parser.add_argument('--limit', type=int, default=20, help='Max results (default: 20)')
     search_parser.add_argument('--content', action='store_true', help='Show full content')
     search_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    search_parser.add_argument('--no-index', action='store_true', help='Skip auto-indexing (faster but may be stale)')
     search_parser.set_defaults(func=cmd_search)
 
     # context command
@@ -320,6 +358,7 @@ def main():
     context_parser.add_argument('--depth', type=int, default=3, help='Parent depth (default: 3)')
     context_parser.add_argument('--content', action='store_true', help='Show full content')
     context_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    context_parser.add_argument('--no-index', action='store_true', help='Skip auto-indexing (faster but may be stale)')
     context_parser.set_defaults(func=cmd_context)
 
     # list command
@@ -327,6 +366,7 @@ def main():
     list_parser.add_argument('--days', type=int, default=7, help='Days back (default: 7)')
     list_parser.add_argument('--limit', type=int, default=20, help='Max results (default: 20)')
     list_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    list_parser.add_argument('--no-index', action='store_true', help='Skip auto-indexing (faster but may be stale)')
     list_parser.set_defaults(func=cmd_list)
 
     # tree command

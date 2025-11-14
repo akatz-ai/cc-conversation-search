@@ -75,23 +75,15 @@ Use this tiered approach, escalating only if needed:
 **Copy this checklist:**
 ```
 Search Progress:
-- [ ] Level 0: JIT Index (always run first, now instant!)
-- [ ] Level 1: Simple focused search (fast)
+- [ ] Level 1: Simple focused search (fast, auto-indexes)
 - [ ] Level 2: Broader search without filters
 - [ ] Level 3: Manual exploration (token-heavy)
 - [ ] Level 4: Present results
 ```
 
-### Level 0: JIT Indexing (ALWAYS RUN FIRST)
-
-**IMPORTANT**: Always run index before search to ensure fresh data:
-```bash
-cc-conversation-search index --days 7 --quiet
-```
-
-This is instant (no AI calls) and ensures you're searching the latest conversations. Use --quiet for minimal output.
-
 ### Level 1: Simple Search (Start Here)
+
+**Note**: Search automatically indexes recent conversations, so you always get fresh data.
 
 Run focused search with time scope:
 ```bash
@@ -184,20 +176,23 @@ Only then report "no match" with reindexing suggestion.
 
 ## Command Reference
 
-**Search:**
+**Search** (auto-indexes before searching):
 ```bash
 cc-conversation-search search "query" --days N --json
 cc-conversation-search search "query" --json  # All time
+cc-conversation-search search "query" --no-index --json  # Skip indexing (faster but may be stale)
 ```
 
-**Context expansion:**
+**Context expansion** (auto-indexes before fetching):
 ```bash
 cc-conversation-search context <UUID> --json
+cc-conversation-search context <UUID> --no-index --json  # Skip indexing
 ```
 
-**List conversations:**
+**List conversations** (auto-indexes before listing):
 ```bash
 cc-conversation-search list --days 30 --json
+cc-conversation-search list --days 30 --no-index --json  # Skip indexing
 ```
 
 **Conversation tree:**
@@ -222,11 +217,10 @@ User: "Find that conversation where we fixed the authentication bug"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `cc-conversation-search index --days 7 --quiet`
-2. Run Level 1: `cc-conversation-search search "authentication bug" --days 14 --json`
-3. If no matches, Level 2: `cc-conversation-search search "auth" --json`
-4. If still no matches, Level 3 (list + tree exploration)
-5. When found, display session ID, project path, timestamp, and resume commands
+1. Run Level 1: `cc-conversation-search search "authentication bug" --days 14 --json`
+2. If no matches, Level 2: `cc-conversation-search search "auth" --json`
+3. If still no matches, Level 3 (list + tree exploration)
+4. When found, display session ID, project path, timestamp, and resume commands
 
 **Example 2: User exploring past work**
 ```
@@ -234,10 +228,9 @@ User: "Did we ever discuss React hooks?"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `cc-conversation-search index --days 7 --quiet`
-2. Run Level 1: `cc-conversation-search search "react hooks" --days 30 --json`
-3. Display all matches with session IDs and project paths
-4. Show resume commands for each match
+1. Run Level 1: `cc-conversation-search search "react hooks" --days 30 --json`
+2. Display all matches with session IDs and project paths
+3. Show resume commands for each match
 
 **Example 3: User wants to return to specific work**
 ```
@@ -245,8 +238,7 @@ User: "I want to go back to where we started implementing the API"
 ```
 
 You should:
-1. Run Level 0 (JIT index): `cc-conversation-search index --days 7 --quiet`
-2. Search: `cc-conversation-search search "implementing API" --json`
-3. Display session ID and project path prominently
-4. Show exact resume commands
-5. Offer context if needed: `cc-conversation-search context <UUID> --json`
+1. Search: `cc-conversation-search search "implementing API" --json`
+2. Display session ID and project path prominently
+3. Show exact resume commands
+4. Offer context if needed: `cc-conversation-search context <UUID> --json`
