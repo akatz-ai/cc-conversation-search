@@ -12,6 +12,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
 from conversation_search.core.summarization import MessageSummarizer
+from conversation_search.core.date_utils import build_date_filter
 
 
 def format_timestamp(iso_timestamp: str, include_date: bool = True, include_seconds: bool = False) -> str:
@@ -62,6 +63,9 @@ class ConversationSearch:
         self,
         query: str,
         days_back: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        date: Optional[str] = None,
         limit: int = 20,
         project_path: Optional[str] = None
     ) -> List[Dict]:
@@ -71,53 +75,80 @@ class ConversationSearch:
         Args:
             query: Search query
             days_back: Limit to last N days (None = all time)
+            since: Start date (YYYY-MM-DD, 'yesterday', 'today')
+            until: End date (YYYY-MM-DD, 'yesterday', 'today')
+            date: Specific date (YYYY-MM-DD, 'yesterday', 'today')
             limit: Maximum number of results
             project_path: Filter by project path
 
         Returns:
             List of matching messages with context
         """
+        # Validate mutually exclusive date filters
+        if days_back and (since or until or date):
+            raise ValueError("Cannot use --days with --since/--until/--date")
         cursor = self.conn.cursor()
 
-        # Sanitize query for FTS5 - escape special characters
-        # FTS5 uses: AND OR NOT " * ( )
-        # For simple searches, just quote the whole thing
-        fts_query = query
-        if not any(op in query for op in [' AND ', ' OR ', ' NOT ', '"']):
-            # Simple query - make it a phrase or use wildcards
-            terms = query.split()
-            if len(terms) == 1:
-                # Single word - use prefix matching
-                fts_query = f'{terms[0]}*'
-            else:
-                # Multiple words - search for all terms (implicit AND)
-                fts_query = ' '.join(f'{term}*' for term in terms)
+        # Handle empty query (match all)
+        if not query or not query.strip():
+            # No FTS search, just filter by dates/project
+            sql = """
+                SELECT
+                    m.message_uuid,
+                    m.session_id,
+                    m.parent_uuid,
+                    m.timestamp,
+                    m.message_type,
+                    m.project_path,
+                    m.depth,
+                    m.is_sidechain,
+                    m.summary,
+                    c.conversation_summary,
+                    c.conversation_file
+                FROM messages m
+                JOIN conversations c ON m.session_id = c.session_id
+                WHERE 1=1
+            """
+            params = []
+        else:
+            # Sanitize query for FTS5
+            fts_query = query
+            if not any(op in query for op in [' AND ', ' OR ', ' NOT ', '"']):
+                terms = query.split()
+                if len(terms) == 1:
+                    fts_query = f'{terms[0]}*'
+                else:
+                    fts_query = ' '.join(f'{term}*' for term in terms)
 
-        # Build query
-        sql = """
-            SELECT
-                m.message_uuid,
-                m.session_id,
-                m.parent_uuid,
-                m.timestamp,
-                m.message_type,
-                m.project_path,
-                m.depth,
-                m.is_sidechain,
-                m.summary,
-                c.conversation_summary,
-                c.conversation_file
-            FROM messages m
-            JOIN conversations c ON m.session_id = c.session_id
-            WHERE m.message_uuid IN (
-                SELECT message_uuid FROM message_summaries_fts
-                WHERE summary MATCH ?
-            )
-        """
+            sql = """
+                SELECT
+                    m.message_uuid,
+                    m.session_id,
+                    m.parent_uuid,
+                    m.timestamp,
+                    m.message_type,
+                    m.project_path,
+                    m.depth,
+                    m.is_sidechain,
+                    m.summary,
+                    c.conversation_summary,
+                    c.conversation_file
+                FROM messages m
+                JOIN conversations c ON m.session_id = c.session_id
+                WHERE m.message_uuid IN (
+                    SELECT message_uuid FROM message_summaries_fts
+                    WHERE summary MATCH ?
+                )
+            """
+            params = [fts_query]
 
-        params = [fts_query]
-
-        if days_back:
+        # Date filtering: use date range if provided, else days_back
+        if date or since or until:
+            date_sql, date_params = build_date_filter(since, until, date)
+            if date_sql:
+                sql += f" AND m.{date_sql}"
+                params.extend(date_params)
+        elif days_back:
             cutoff = (datetime.now() - timedelta(days=days_back)).isoformat()
             sql += " AND m.timestamp >= ?"
             params.append(cutoff)
@@ -270,16 +301,35 @@ class ConversationSearch:
 
     def list_recent_conversations(
         self,
-        days_back: int = 7,
+        days_back: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        date: Optional[str] = None,
         limit: int = 20,
         project_path: Optional[str] = None
     ) -> List[Dict]:
         """
         List recent conversations
 
+        Args:
+            days_back: Limit to last N days (default: 7 if no other filters)
+            since: Start date (YYYY-MM-DD, 'yesterday', 'today')
+            until: End date (YYYY-MM-DD, 'yesterday', 'today')
+            date: Specific date (YYYY-MM-DD, 'yesterday', 'today')
+            limit: Maximum results
+            project_path: Filter by project path
+
         Returns:
             List of conversation metadata
         """
+        # Default to 7 days if no filters provided
+        if days_back is None and not (since or until or date):
+            days_back = 7
+
+        # Validate mutually exclusive date filters
+        if days_back and (since or until or date):
+            raise ValueError("Cannot use --days with --since/--until/--date")
+
         cursor = self.conn.cursor()
 
         sql = """
@@ -288,7 +338,13 @@ class ConversationSearch:
         """
         params = []
 
-        if days_back:
+        # Date filtering
+        if date or since or until:
+            date_sql, date_params = build_date_filter(since, until, date)
+            if date_sql:
+                sql += f" AND {date_sql.replace('timestamp', 'last_message_at')}"
+                params.extend(date_params)
+        elif days_back:
             cutoff = (datetime.now() - timedelta(days=days_back)).isoformat()
             sql += " AND last_message_at >= ?"
             params.append(cutoff)

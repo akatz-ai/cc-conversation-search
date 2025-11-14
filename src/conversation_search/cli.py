@@ -117,6 +117,9 @@ def cmd_search(args):
         results = search.search_conversations(
             query=args.query,
             days_back=args.days,
+            since=getattr(args, 'since', None),
+            until=getattr(args, 'until', None),
+            date=getattr(args, 'date', None),
             limit=args.limit,
             project_path=args.project
         )
@@ -225,7 +228,7 @@ def cmd_list(args):
     # Auto-index before listing to ensure fresh data
     if not getattr(args, 'no_index', False):
         indexer = ConversationIndexer(quiet=True)
-        files = indexer.scan_conversations(days_back=args.days)
+        files = indexer.scan_conversations(days_back=args.days if args.days else 7)
         if files:
             for conv_file in files:
                 try:
@@ -236,7 +239,13 @@ def cmd_list(args):
 
     search = ConversationSearch()
 
-    convs = search.list_recent_conversations(days_back=args.days, limit=args.limit)
+    convs = search.list_recent_conversations(
+        days_back=args.days,
+        since=getattr(args, 'since', None),
+        until=getattr(args, 'until', None),
+        date=getattr(args, 'date', None),
+        limit=args.limit
+    )
 
     if args.json:
         print(json.dumps([dict(c) for c in convs], indent=2))
@@ -345,6 +354,9 @@ def main():
     search_parser = subparsers.add_parser('search', help='Search conversations')
     search_parser.add_argument('query', help='Search query')
     search_parser.add_argument('--days', type=int, help='Limit to last N days')
+    search_parser.add_argument('--since', help='Start date (YYYY-MM-DD, yesterday, today)')
+    search_parser.add_argument('--until', help='End date (YYYY-MM-DD, yesterday, today)')
+    search_parser.add_argument('--date', help='Specific date (YYYY-MM-DD, yesterday, today)')
     search_parser.add_argument('--project', help='Filter by project path')
     search_parser.add_argument('--limit', type=int, default=20, help='Max results (default: 20)')
     search_parser.add_argument('--content', action='store_true', help='Show full content')
@@ -363,7 +375,10 @@ def main():
 
     # list command
     list_parser = subparsers.add_parser('list', help='List recent conversations')
-    list_parser.add_argument('--days', type=int, default=7, help='Days back (default: 7)')
+    list_parser.add_argument('--days', type=int, help='Days back (default: 7)')
+    list_parser.add_argument('--since', help='Start date (YYYY-MM-DD, yesterday, today)')
+    list_parser.add_argument('--until', help='End date (YYYY-MM-DD, yesterday, today)')
+    list_parser.add_argument('--date', help='Specific date (YYYY-MM-DD, yesterday, today)')
     list_parser.add_argument('--limit', type=int, default=20, help='Max results (default: 20)')
     list_parser.add_argument('--json', action='store_true', help='Output as JSON')
     list_parser.add_argument('--no-index', action='store_true', help='Skip auto-indexing (faster but may be stale)')
