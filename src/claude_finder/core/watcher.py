@@ -15,7 +15,7 @@ from typing import Dict, List, Set
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from summarization import MessageSummarizer, is_summarizer_conversation
+from claude_finder.core.summarization import MessageSummarizer, is_summarizer_conversation
 
 
 class ConversationWatcher(FileSystemEventHandler):
@@ -136,7 +136,7 @@ class ConversationWatcher(FileSystemEventHandler):
         print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Processing {len(self.pending_files)} updated conversations (idle for {int(time_since_change)}s)...")
 
         # Step 1: Re-index modified conversations to catch new messages
-        from indexer import ConversationIndexer
+        from claude_finder.core.indexer import ConversationIndexer
         indexer = ConversationIndexer(db_path=str(self.db_path))
 
         for conv_file in list(self.pending_files):
@@ -220,7 +220,7 @@ class ConversationWatcher(FileSystemEventHandler):
 
 def ensure_indexed():
     """Index recently modified conversations to catch up after watcher downtime"""
-    from indexer import ConversationIndexer
+    from claude_finder.core.indexer import ConversationIndexer
 
     print("Catching up on recently modified conversations...")
     try:
@@ -258,24 +258,18 @@ def ensure_indexed():
         print(f"Error during catchup: {e}")
 
 
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description='Claude Finder Watcher Daemon')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                       help='Print file change events as they happen')
-    args = parser.parse_args()
-
+def start_watcher(verbose: bool = False, db_path: Path = None):
+    """Start the file watcher daemon"""
     print("Claude Finder Watcher Daemon")
     print("=" * 50)
 
     # Setup
-    db_path = Path.home() / ".claude-finder" / "index.db"
+    if db_path is None:
+        db_path = Path.home() / ".claude-finder" / "index.db"
     projects_dir = Path.home() / ".claude" / "projects"
 
     if not db_path.exists():
-        print("Error: Database not found. Run indexer first:")
-        print("  python3 src/indexer.py --days 7")
+        print("Error: Database not found. Run 'claude-finder init' first")
         sys.exit(1)
 
     if not projects_dir.exists():
@@ -288,11 +282,11 @@ def main():
     # Setup file watcher
     print(f"\nWatching: {projects_dir}")
     print("Idle timeout: 30 seconds (processes when no new changes for 30s)")
-    if args.verbose:
+    if verbose:
         print("Verbose mode: ON (will print file changes as they happen)")
     print("Press Ctrl+C to stop\n")
 
-    event_handler = ConversationWatcher(db_path, batch_size=10, verbose=args.verbose)
+    event_handler = ConversationWatcher(db_path, batch_size=10, verbose=verbose)
     observer = Observer()
     observer.schedule(event_handler, str(projects_dir), recursive=True)
     observer.start()
@@ -313,7 +307,3 @@ def main():
 
     observer.join()
     print("✓ Watcher stopped")
-
-
-if __name__ == '__main__':
-    main()

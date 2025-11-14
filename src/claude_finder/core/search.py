@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
-from summarization import MessageSummarizer
+from claude_finder.core.summarization import MessageSummarizer
 
 
 class ConversationSearch:
@@ -470,7 +470,7 @@ def main():
     try:
         if args.cleanup:
             # Clean up database: mark tool noise and remove summarizer conversations
-            from summarization import MessageSummarizer, is_summarizer_conversation
+            from claude_finder.core.summarization import MessageSummarizer, is_summarizer_conversation
 
             print("🧹 Cleaning up database...")
             summarizer = MessageSummarizer(db_path=args.db)

@@ -2,6 +2,8 @@
 __pycache__/
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 .DS_Store
 *.log
 .venv/
@@ -9,3 +11,7 @@ venv/
 *.swp
 *.swo
 *~
+*.egg-info
+dist/
+build/
+*.egg

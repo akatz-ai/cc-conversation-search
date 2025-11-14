@@ -5,6 +5,7 @@ Uses Claude Code CLI in headless mode for batch message summarization
 """
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -160,21 +161,35 @@ JSON output:"""
 
         try:
             # Run Claude Code in headless mode from summarizer workspace
+            # IMPORTANT: Remove ANTHROPIC_API_KEY from env to use Claude Code auth
+            env = os.environ.copy()
+            env.pop('ANTHROPIC_API_KEY', None)  # Remove if present
+
             result = subprocess.run(
                 ['claude', '-p', '--model', 'haiku', '--output-format', 'json'],
                 input=prompt,
                 capture_output=True,
                 text=True,
                 cwd=str(self.workspace_dir),
-                timeout=60
+                timeout=60,
+                env=env
             )
 
             if result.returncode != 0:
-                print(f"Error calling Claude: {result.stderr}", file=sys.stderr)
+                print(f"Error calling Claude CLI (exit {result.returncode}):", file=sys.stderr)
+                print(f"  stdout: {result.stdout[:200]}", file=sys.stderr)
+                print(f"  stderr: {result.stderr[:200]}", file=sys.stderr)
                 return []
 
             # Parse JSON output
             data = json.loads(result.stdout)
+
+            # Check for API errors in the response
+            if data.get('is_error'):
+                error_msg = data.get('result', 'Unknown error')
+                print(f"Claude API error: {error_msg}", file=sys.stderr)
+                return []
+
             response_text = data.get('result', '')
 
             # Extract JSON from response (in case there's extra text)

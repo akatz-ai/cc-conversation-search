@@ -11,7 +11,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from summarization import MessageSummarizer, is_summarizer_conversation
+from importlib.resources import files
+from claude_finder.core.summarization import MessageSummarizer, is_summarizer_conversation
 
 
 class ConversationIndexer:
@@ -31,9 +32,8 @@ class ConversationIndexer:
 
     def _init_db(self):
         """Initialize database with schema"""
-        schema_path = Path(__file__).parent.parent / "schema.sql"
-        with open(schema_path) as f:
-            self.conn.executescript(f.read())
+        schema_sql = files('claude_finder.data').joinpath('schema.sql').read_text()
+        self.conn.executescript(schema_sql)
         self.conn.commit()
 
     def _get_summarizer_project_hash(self) -> Optional[str]:
@@ -228,32 +228,66 @@ class ConversationIndexer:
         )
         existing = cursor.fetchone()
 
+        is_update = False
         if existing:
-            print(f"  Already indexed at {existing['indexed_at']}, updating...")
-            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            cursor.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
+            print(f"  Already indexed at {existing['indexed_at']}, checking for new messages...")
 
-        # Find root message
-        root_message = next((m for m in messages if not m['parent_uuid']), messages[0])
+            # Get existing message UUIDs
+            cursor.execute(
+                "SELECT message_uuid FROM messages WHERE session_id = ?",
+                (session_id,)
+            )
+            existing_uuids = {row['message_uuid'] for row in cursor.fetchall()}
 
-        # Insert conversation
-        cursor.execute("""
-            INSERT INTO conversations (
-                session_id, project_path, conversation_file,
-                root_message_uuid, leaf_message_uuid, conversation_summary,
-                first_message_at, last_message_at, message_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session_id,
-            project_path,
-            str(file_path),
-            root_message['uuid'],
-            conv_meta.get('leafUuid') if conv_meta else None,
-            conv_meta.get('summary', 'Untitled conversation') if conv_meta else None,
-            messages[0]['timestamp'],
-            messages[-1]['timestamp'],
-            len(messages)
-        ))
+            # Find new messages only
+            new_messages = [m for m in messages if m['uuid'] not in existing_uuids]
+
+            if not new_messages:
+                print(f"  No new messages, skipping")
+                return
+
+            print(f"  Found {len(new_messages)} new messages (total: {len(messages)})")
+
+            # Save reference to all messages for metadata update
+            all_messages = messages
+            messages = new_messages  # Only process new ones
+            is_update = True
+
+            # Update conversation metadata (use last message from ALL messages, not just new ones)
+            cursor.execute("""
+                UPDATE conversations
+                SET last_message_at = ?,
+                    message_count = ?,
+                    leaf_message_uuid = ?,
+                    indexed_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+            """, (
+                all_messages[-1]['timestamp'],
+                len(existing_uuids) + len(new_messages),
+                conv_meta.get('leafUuid') if conv_meta else None,
+                session_id
+            ))
+        else:
+            # New conversation - insert metadata
+            root_message = next((m for m in messages if not m['parent_uuid']), messages[0])
+
+            cursor.execute("""
+                INSERT INTO conversations (
+                    session_id, project_path, conversation_file,
+                    root_message_uuid, leaf_message_uuid, conversation_summary,
+                    first_message_at, last_message_at, message_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session_id,
+                project_path,
+                str(file_path),
+                root_message['uuid'],
+                conv_meta.get('leafUuid') if conv_meta else None,
+                conv_meta.get('summary', 'Untitled conversation') if conv_meta else None,
+                messages[0]['timestamp'],
+                messages[-1]['timestamp'],
+                len(messages)
+            ))
 
         # Batch process messages for summarization
         needs_summary = []
@@ -318,7 +352,12 @@ class ConversationIndexer:
                     updated = self.summarizer.update_database(summaries)
                     total_updated += updated
 
-            print(f"  ✓ Summarized {total_updated}/{len(needs_summary)} messages")
+            if is_update:
+                print(f"  ✓ Added {len(messages)} new messages, summarized {total_updated}/{len(needs_summary)}")
+            else:
+                print(f"  ✓ Summarized {total_updated}/{len(needs_summary)} messages")
+        elif is_update:
+            print(f"  ✓ Added {len(messages)} new messages (no summarization)")
         else:
             print(f"  ✓ Indexed {len(messages)} messages (no summarization)")
 

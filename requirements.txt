@@ -1,2 +1,0 @@
-# Claude Finder dependencies
-watchdog>=3.0.0  # File system monitoring for background daemon
