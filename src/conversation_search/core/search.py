@@ -67,10 +67,11 @@ class ConversationSearch:
         until: Optional[str] = None,
         date: Optional[str] = None,
         limit: int = 20,
-        project_path: Optional[str] = None
+        project_path: Optional[str] = None,
+        snippet_tokens: int = 128
     ) -> List[Dict]:
         """
-        Search conversations using full-text search on summaries
+        Search conversations using full-text search on complete content
 
         Args:
             query: Search query
@@ -80,9 +81,10 @@ class ConversationSearch:
             date: Specific date (YYYY-MM-DD, 'yesterday', 'today')
             limit: Maximum number of results
             project_path: Filter by project path
+            snippet_tokens: Number of tokens to show around each match (default: 128)
 
         Returns:
-            List of matching messages with context
+            List of matching messages with context snippets
         """
         # Validate mutually exclusive date filters
         if days_back and (since or until or date):
@@ -102,7 +104,7 @@ class ConversationSearch:
                     m.project_path,
                     m.depth,
                     m.is_sidechain,
-                    m.summary,
+                    SUBSTR(m.full_content, 1, 500) as context_snippet,
                     c.conversation_summary,
                     c.conversation_file
                 FROM messages m
@@ -130,18 +132,16 @@ class ConversationSearch:
                     m.project_path,
                     m.depth,
                     m.is_sidechain,
-                    m.summary,
+                    snippet(message_content_fts, 1, '**', '**', '...', ?) as context_snippet,
                     c.conversation_summary,
                     c.conversation_file
                 FROM messages m
+                JOIN message_content_fts ON m.rowid = message_content_fts.rowid
                 JOIN conversations c ON m.session_id = c.session_id
-                WHERE m.message_uuid IN (
-                    SELECT message_uuid FROM message_summaries_fts
-                    WHERE summary MATCH ?
-                )
-                AND m.is_meta_conversation = FALSE
+                WHERE message_content_fts.full_content MATCH ?
+                  AND m.is_meta_conversation = FALSE
             """
-            params = [fts_query]
+            params = [snippet_tokens, fts_query]
 
         # Date filtering: use date range if provided, else days_back
         if date or since or until:
@@ -501,7 +501,7 @@ class ConversationSearch:
         cursor = self.conn.cursor()
 
         # Use FTS5 rebuild command - this is the proper way to rebuild content tables
-        cursor.execute("INSERT INTO message_summaries_fts(message_summaries_fts) VALUES('rebuild')")
+        cursor.execute("INSERT INTO message_content_fts(message_content_fts) VALUES('rebuild')")
 
         self.conn.commit()
         self._fts_rebuilt = True
@@ -512,7 +512,7 @@ class ConversationSearch:
 
         try:
             # FTS5 integrity check
-            cursor.execute("INSERT INTO message_summaries_fts(message_summaries_fts) VALUES('integrity-check')")
+            cursor.execute("INSERT INTO message_content_fts(message_content_fts) VALUES('integrity-check')")
             return True
         except sqlite3.Error:
             return False

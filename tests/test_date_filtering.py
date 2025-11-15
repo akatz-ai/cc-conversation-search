@@ -55,9 +55,9 @@ class TestSearchWithDateFilters:
                 indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE VIRTUAL TABLE message_summaries_fts USING fts5(
+            CREATE VIRTUAL TABLE message_content_fts USING fts5(
                 message_uuid UNINDEXED,
-                summary,
+                full_content,
                 content='messages',
                 content_rowid='rowid'
             );
@@ -78,20 +78,20 @@ class TestSearchWithDateFilters:
             ('msg-6', 'session-4', week_ago, 'Started new feature development'),
         ]
 
-        for msg_id, session_id, timestamp, summary in test_messages:
+        for msg_id, session_id, timestamp, content in test_messages:
             conn.execute("""
                 INSERT INTO messages (
                     message_uuid, session_id, timestamp, message_type,
-                    summary, full_content, project_path, is_summarized
+                    full_content, project_path, is_summarized
                 )
-                VALUES (?, ?, ?, 'user', ?, ?, '/test/project', TRUE)
-            """, (msg_id, session_id, timestamp.isoformat(), summary, summary))
+                VALUES (?, ?, ?, 'user', ?, '/test/project', TRUE)
+            """, (msg_id, session_id, timestamp.isoformat(), content))
 
             # Insert into FTS
             conn.execute("""
-                INSERT INTO message_summaries_fts (message_uuid, summary)
+                INSERT INTO message_content_fts (message_uuid, full_content)
                 VALUES (?, ?)
-            """, (msg_id, summary))
+            """, (msg_id, content))
 
         # Insert conversations
         for session_id, last_time in [

@@ -46,28 +46,28 @@ CREATE INDEX IF NOT EXISTS idx_is_summarized ON messages(is_summarized);
 CREATE INDEX IF NOT EXISTS idx_is_tool_noise ON messages(is_tool_noise);
 CREATE INDEX IF NOT EXISTS idx_is_meta_conversation ON messages(is_meta_conversation);
 
--- Full-text search on summaries (lightweight)
-CREATE VIRTUAL TABLE IF NOT EXISTS message_summaries_fts USING fts5(
+-- Full-text search on complete content
+CREATE VIRTUAL TABLE IF NOT EXISTS message_content_fts USING fts5(
     message_uuid UNINDEXED,
-    summary,
+    full_content,
     content='messages',
     content_rowid='rowid'
 );
 
 -- Triggers to keep FTS in sync
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO message_summaries_fts(rowid, message_uuid, summary)
-    VALUES (new.rowid, new.message_uuid, new.summary);
+    INSERT INTO message_content_fts(rowid, message_uuid, full_content)
+    VALUES (new.rowid, new.message_uuid, new.full_content);
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    DELETE FROM message_summaries_fts WHERE rowid = old.rowid;
+    DELETE FROM message_content_fts WHERE rowid = old.rowid;
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-    DELETE FROM message_summaries_fts WHERE rowid = old.rowid;
-    INSERT INTO message_summaries_fts(rowid, message_uuid, summary)
-    VALUES (new.rowid, new.message_uuid, new.summary);
+    DELETE FROM message_content_fts WHERE rowid = old.rowid;
+    INSERT INTO message_content_fts(rowid, message_uuid, full_content)
+    VALUES (new.rowid, new.message_uuid, new.full_content);
 END;
 
 -- Conversation metadata (one per session)

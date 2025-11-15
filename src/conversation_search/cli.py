@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Union
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch, format_timestamp
 
-__version__ = "0.4.11"
+__version__ = "0.5.0"
 
 
 def localize_timestamps(data: Any) -> Any:
@@ -125,7 +125,8 @@ def cmd_search(args):
     # Auto-index before searching to ensure fresh data
     if not getattr(args, 'no_index', False):
         indexer = ConversationIndexer(quiet=True)
-        days_to_index = args.days if args.days else 7
+        # Index at least as far back as search range, minimum 30 days
+        days_to_index = max(args.days if args.days else 30, 30)
         files = indexer.scan_conversations(days_back=days_to_index)
         if files:
             for conv_file in files:
@@ -181,7 +182,7 @@ def cmd_search(args):
             if content:
                 print(f"\n   {content[:300]}...")
         else:
-            print(f"\n   {result['summary']}")
+            print(f"\n   {result['context_snippet']}")
 
         print(f"\n   Resume:")
         print(f"     cd {project_dir}")
@@ -194,7 +195,7 @@ def cmd_context(args):
     # Auto-index recent conversations to ensure fresh data
     if not getattr(args, 'no_index', False):
         indexer = ConversationIndexer(quiet=True)
-        files = indexer.scan_conversations(days_back=7)
+        files = indexer.scan_conversations(days_back=30)
         if files:
             for conv_file in files:
                 try:
@@ -252,7 +253,8 @@ def cmd_list(args):
     # Auto-index before listing to ensure fresh data
     if not getattr(args, 'no_index', False):
         indexer = ConversationIndexer(quiet=True)
-        files = indexer.scan_conversations(days_back=args.days if args.days else 7)
+        days_to_index = max(args.days if args.days else 30, 30)
+        files = indexer.scan_conversations(days_back=days_to_index)
         if files:
             for conv_file in files:
                 try:

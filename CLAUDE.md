@@ -36,3 +36,16 @@ When users update the plugin via `/plugin update conversation-search`:
 ## Breaking Changes
 
 Only bump minor version (0.4 → 0.5) for breaking changes. Update SKILL.md minimum version if needed.
+
+
+# UV
+
+## Testing
+
+You should use uv to run tests:
+
+```bash
+uv run pytest tests/ -v
+
+uv run pytest tests/<filename> # run specific test
+```

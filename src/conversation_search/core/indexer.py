@@ -462,20 +462,11 @@ class ConversationIndexer:
                 len(messages)
             ))
 
-        # Batch process messages for smart extraction
-        needs_extraction = []
+        # Classify messages for tool noise filtering
         tool_noise_uuids = []
-        too_short_uuids = []
-
         for message in messages:
-            should_extract, reason = self.summarizer.needs_summarization(message)
-
-            if reason == 'tool_noise':
+            if self.summarizer.is_tool_noise(message):
                 tool_noise_uuids.append(message['uuid'])
-            elif reason == 'too_short':
-                too_short_uuids.append(message['uuid'])
-            elif should_extract and summarize:  # 'summarize' flag now means "extract"
-                needs_extraction.append(message)
 
         # Insert all messages in a single transaction
         try:
@@ -484,7 +475,8 @@ class ConversationIndexer:
                     INSERT INTO messages (
                         message_uuid, session_id, parent_uuid, is_sidechain,
                         depth, timestamp, message_type, project_path,
-                        conversation_file, summary, full_content, is_meta_conversation
+                        conversation_file, full_content, is_meta_conversation,
+                        is_tool_noise
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     message['uuid'],
@@ -496,28 +488,10 @@ class ConversationIndexer:
                     message['message_type'],
                     project_path,
                     str(file_path),
-                    message['content'][:150] if len(message['content']) < 150 else message['content'][:147] + "...",
                     message['content'],
-                    message.get('is_meta_conversation', False)
+                    message.get('is_meta_conversation', False),
+                    message['uuid'] in tool_noise_uuids
                 ))
-
-            # Mark tool noise in same transaction
-            if tool_noise_uuids:
-                placeholders = ','.join('?' * len(tool_noise_uuids))
-                cursor.execute(f"""
-                    UPDATE messages
-                    SET is_tool_noise = TRUE, summary_method = 'too_short'
-                    WHERE message_uuid IN ({placeholders})
-                """, tool_noise_uuids)
-
-            # Mark too short in same transaction
-            if too_short_uuids:
-                placeholders = ','.join('?' * len(too_short_uuids))
-                cursor.execute(f"""
-                    UPDATE messages
-                    SET is_summarized = TRUE, summary_method = 'too_short'
-                    WHERE message_uuid IN ({placeholders})
-                """, too_short_uuids)
 
             # Commit once at the end
             self.conn.commit()
@@ -525,34 +499,17 @@ class ConversationIndexer:
             if tool_noise_uuids and not self.quiet:
                 print(f"  Marked {len(tool_noise_uuids)} messages as tool noise")
 
+            if not self.quiet:
+                if is_update:
+                    print(f"  ✓ Added {len(messages)} new messages")
+                else:
+                    print(f"  ✓ Indexed {len(messages)} messages")
+
         except sqlite3.Error as e:
             self.conn.rollback()
             if not self.quiet:
                 print(f"  Error during indexing, rolled back: {e}")
             raise
-
-        # Smart extraction (instant, no API calls)
-        if summarize and needs_extraction:
-            if not self.quiet:
-                print(f"  Extracting searchable text from {len(needs_extraction)} messages...")
-
-            # Extract in single batch (no API, instant)
-            extractions = self.summarizer.extract_batch(needs_extraction)
-            if extractions:
-                updated = self.summarizer.update_database(extractions, method='smart_extraction')
-                if not self.quiet:
-                    print(f"  ✓ Extracted {updated}/{len(needs_extraction)} summaries")
-
-            if not self.quiet:
-                if is_update:
-                    print(f"  ✓ Added {len(messages)} new messages with smart extraction")
-                else:
-                    print(f"  ✓ Indexed {len(messages)} messages with smart extraction")
-        elif not self.quiet:
-            if is_update:
-                print(f"  ✓ Added {len(messages)} new messages (no extraction)")
-            else:
-                print(f"  ✓ Indexed {len(messages)} messages (no extraction)")
 
     def index_all(self, days_back: Optional[int] = 1, summarize: bool = True):
         """Index all conversations from the last N days"""
