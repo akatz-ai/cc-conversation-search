@@ -1,0 +1,16 @@
+{
+  "description": "Index new conversations when a session ends, so search stays fresh without a manual run.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/on-session-end.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

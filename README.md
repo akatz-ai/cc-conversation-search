@@ -9,6 +9,7 @@ Find and resume past Claude Code conversations using smart hybrid extraction and
 - **Calendar Date Filtering**: Intuitive `--date yesterday`, `--since`, `--until` parameters
 - **Smart Extraction**: Hybrid indexing (full user content + smart assistant extraction)
 - **JIT Indexing**: Instant indexing before search (no AI calls, no delays)
+- **Auto-Index on Session End**: A plugin hook indexes new conversations when each session ends, so the first search is already fresh
 - **Local Timezone Display**: All timestamps shown in your local time
 - **Meta-Conversation Filtering**: Automatically excludes search tool usage from results
 - **Progressive Exploration**: Simple search → broader search → manual exploration
@@ -284,11 +285,39 @@ indexer.index_all(days_back=7)
 indexer.close()
 ```
 
+## Automatic Indexing on Session End
+
+The plugin ships a `SessionEnd` hook. The hook runs `cc-conversation-search index`
+each time a Claude Code session ends. This keeps the index current, so your next
+search returns fresh results without waiting for the search-time index.
+
+The hook is safe by design:
+
+- **Local and fast**: incremental indexing, no AI calls, no network.
+- **Silent**: it prints nothing and never blocks the session from closing.
+- **Self-skipping**: if the CLI is not installed, the hook does nothing.
+
+To turn the hook off, set an environment variable in your shell profile:
+
+```bash
+export CC_CONVERSATION_SEARCH_NO_AUTOINDEX=1
+```
+
+The hook only ships with the Claude Code plugin. A manual CLI install does not
+add it.
+
 ## Configuration
 
 **Database location:** `~/.conversation-search/index.db`
 
 **No configuration file needed** - all settings via command-line flags.
+
+**Environment variables:**
+
+- `CC_CONVERSATION_SEARCH_NO_AUTOINDEX`: set to any value to disable the
+  auto-index-on-session-end hook.
+- `CC_CONVERSATION_SEARCH_CMD`: override the `claude` command name (for example,
+  an alias).
 
 ## Performance
 
@@ -333,6 +362,10 @@ conversation-search/
 │   └── conversation-search/
 │       ├── SKILL.md           # Claude Code Skill with query classification
 │       └── REFERENCE.md       # Complete command reference
+├── hooks/
+│   └── hooks.json            # SessionEnd hook: auto-index on session end
+├── scripts/
+│   └── on-session-end.sh     # Hook script that runs the indexer
 ├── tests/
 │   ├── test_date_utils.py     # Date parsing tests
 │   ├── test_date_filtering.py # Date filter integration tests
