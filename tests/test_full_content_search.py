@@ -5,7 +5,7 @@ import pytest
 import sqlite3
 import tempfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from conversation_search.core.indexer import ConversationIndexer
 from conversation_search.core.search import ConversationSearch
 
@@ -381,7 +381,7 @@ class TestDateFilteringWithFullContent:
             ))
 
         # Insert old message
-        old_time = datetime(2025, 10, 1, 12, 0, 0)
+        old_time = datetime.now() - timedelta(days=30)
         cursor.execute("""
             INSERT INTO messages (
                 message_uuid, session_id, timestamp, message_type,
@@ -397,7 +397,7 @@ class TestDateFilteringWithFullContent:
         ))
 
         # Insert recent message
-        recent_time = datetime(2025, 11, 14, 12, 0, 0)
+        recent_time = datetime.now() - timedelta(days=1)
         cursor.execute("""
             INSERT INTO messages (
                 message_uuid, session_id, timestamp, message_type,
@@ -414,7 +414,7 @@ class TestDateFilteringWithFullContent:
 
         indexer.conn.commit()
 
-        # Search with date filter (last 7 days from Nov 14)
+        # Search with a relative date filter
         results = search_engine.search_conversations(
             'KEYWORD',
             days_back=7

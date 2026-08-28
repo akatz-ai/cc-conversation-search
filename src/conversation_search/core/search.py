@@ -177,6 +177,37 @@ class ConversationSearch:
                 return [dict(row) for row in results]
             raise
 
+    def find_exact_session(self, session_id: str) -> List[Dict]:
+        """Return one resumable result for an exact session identifier."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT
+                m.message_uuid,
+                c.session_id,
+                m.parent_uuid,
+                COALESCE(m.timestamp, c.last_message_at) AS timestamp,
+                COALESCE(m.message_type, 'assistant') AS message_type,
+                c.project_path,
+                COALESCE(m.depth, 0) AS depth,
+                COALESCE(m.is_sidechain, FALSE) AS is_sidechain,
+                COALESCE(c.conversation_summary, 'Exact session match')
+                    AS context_snippet,
+                c.conversation_summary,
+                c.conversation_file
+            FROM conversations c
+            LEFT JOIN messages m ON m.rowid = (
+                SELECT latest.rowid
+                FROM messages latest
+                WHERE latest.session_id = c.session_id
+                ORDER BY latest.timestamp DESC, latest.rowid DESC
+                LIMIT 1
+            )
+            WHERE c.session_id = ?
+            LIMIT 1
+        """, (session_id,))
+        row = cursor.fetchone()
+        return [dict(row)] if row else []
+
     def get_conversation_context(
         self,
         message_uuid: str,

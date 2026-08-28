@@ -44,7 +44,8 @@ CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_project_path ON messages(project_path);
 CREATE INDEX IF NOT EXISTS idx_is_summarized ON messages(is_summarized);
 CREATE INDEX IF NOT EXISTS idx_is_tool_noise ON messages(is_tool_noise);
-CREATE INDEX IF NOT EXISTS idx_is_meta_conversation ON messages(is_meta_conversation);
+-- idx_is_meta_conversation is created by the migration after legacy databases
+-- have the column.
 
 -- Full-text search on complete content
 CREATE VIRTUAL TABLE IF NOT EXISTS message_content_fts USING fts5(
@@ -61,11 +62,13 @@ CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    DELETE FROM message_content_fts WHERE rowid = old.rowid;
+    INSERT INTO message_content_fts(message_content_fts, rowid, message_uuid, full_content)
+    VALUES ('delete', old.rowid, old.message_uuid, old.full_content);
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-    DELETE FROM message_content_fts WHERE rowid = old.rowid;
+    INSERT INTO message_content_fts(message_content_fts, rowid, message_uuid, full_content)
+    VALUES ('delete', old.rowid, old.message_uuid, old.full_content);
     INSERT INTO message_content_fts(rowid, message_uuid, full_content)
     VALUES (new.rowid, new.message_uuid, new.full_content);
 END;
@@ -88,6 +91,19 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 CREATE INDEX IF NOT EXISTS idx_conv_project ON conversations(project_path);
 CREATE INDEX IF NOT EXISTS idx_conv_last_message ON conversations(last_message_at DESC);
+
+-- Files are tracked separately from conversations so unchanged JSONL files can be
+-- rejected using metadata without parsing their contents.
+CREATE TABLE IF NOT EXISTS indexed_files (
+    file_path TEXT PRIMARY KEY,
+    session_id TEXT,
+    size_bytes INTEGER NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    prefix_hash TEXT,
+    is_summarizer BOOLEAN DEFAULT FALSE,
+    meta_active BOOLEAN DEFAULT FALSE,
+    indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 
 -- Processing queue for new/updated files
 CREATE TABLE IF NOT EXISTS index_queue (

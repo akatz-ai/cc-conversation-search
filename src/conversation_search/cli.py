@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from importlib.metadata import version, PackageNotFoundError
@@ -21,6 +22,39 @@ except PackageNotFoundError:
 # Configurable Claude command (default: 'claude')
 # Set CC_CONVERSATION_SEARCH_CMD env var to override (e.g., 'clauded' for alias)
 CLAUDE_CMD = os.environ.get('CC_CONVERSATION_SEARCH_CMD', 'claude')
+SESSION_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _auto_index(args, days: int, exact_session_id: str = None):
+    """Run bounded incremental indexing, or directly refresh one exact session."""
+    indexer = ConversationIndexer(quiet=True)
+    try:
+        if exact_session_id:
+            session_file = indexer.find_session_file(exact_session_id)
+            if session_file:
+                indexer.index_conversation(session_file)
+            return
+
+        result = indexer.index_changed(
+            days_back=days,
+            max_files=getattr(args, 'index_limit', 200),
+            timeout_seconds=getattr(args, 'index_timeout', 5.0),
+        )
+        if result.truncated or result.failed or result.elapsed_seconds >= 1.0:
+            status = (
+                f"Auto-index: {result.indexed}/{result.candidates} changed files in "
+                f"{result.elapsed_seconds:.1f}s"
+            )
+            if result.failed:
+                status += f", {result.failed} failed"
+            if result.truncated:
+                status += "; budget reached, remaining files will be retried next run"
+            print(status, file=sys.stderr)
+    finally:
+        indexer.close()
 
 
 def localize_timestamps(data: Any) -> Any:
@@ -131,32 +165,27 @@ def cmd_index(args):
 
 def cmd_search(args):
     """Search conversations"""
-    # Auto-index before searching to ensure fresh data
+    normalized_query = args.query.strip()
+    exact_session_id = normalized_query if SESSION_ID_RE.fullmatch(normalized_query) else None
     if not getattr(args, 'no_index', False):
-        indexer = ConversationIndexer(quiet=True)
-        # Index at least as far back as search range, minimum 30 days
         days_to_index = max(args.days if args.days else 30, 30)
-        files = indexer.scan_conversations(days_back=days_to_index)
-        if files:
-            for conv_file in files:
-                try:
-                    indexer.index_conversation(conv_file, summarize=True)
-                except Exception:
-                    pass  # Silent failures for auto-indexing
-        indexer.close()
+        _auto_index(args, days_to_index, exact_session_id=exact_session_id)
 
     search = ConversationSearch()
 
     try:
-        results = search.search_conversations(
-            query=args.query,
-            days_back=args.days,
-            since=getattr(args, 'since', None),
-            until=getattr(args, 'until', None),
-            date=getattr(args, 'date', None),
-            limit=args.limit,
-            project_path=args.project
-        )
+        if exact_session_id:
+            results = search.find_exact_session(exact_session_id)
+        else:
+            results = search.search_conversations(
+                query=args.query,
+                days_back=args.days,
+                since=getattr(args, 'since', None),
+                until=getattr(args, 'until', None),
+                date=getattr(args, 'date', None),
+                limit=args.limit,
+                project_path=args.project
+            )
     except Exception as e:
         print(f"Error: {e}")
         raise
@@ -203,15 +232,7 @@ def cmd_context(args):
     """Get context around a message"""
     # Auto-index recent conversations to ensure fresh data
     if not getattr(args, 'no_index', False):
-        indexer = ConversationIndexer(quiet=True)
-        files = indexer.scan_conversations(days_back=30)
-        if files:
-            for conv_file in files:
-                try:
-                    indexer.index_conversation(conv_file, summarize=True)
-                except Exception:
-                    pass  # Silent failures for auto-indexing
-        indexer.close()
+        _auto_index(args, 30)
 
     search = ConversationSearch()
 
@@ -261,16 +282,8 @@ def cmd_list(args):
     """List recent conversations"""
     # Auto-index before listing to ensure fresh data
     if not getattr(args, 'no_index', False):
-        indexer = ConversationIndexer(quiet=True)
         days_to_index = max(args.days if args.days else 30, 30)
-        files = indexer.scan_conversations(days_back=days_to_index)
-        if files:
-            for conv_file in files:
-                try:
-                    indexer.index_conversation(conv_file, summarize=True)
-                except Exception:
-                    pass  # Silent failures for auto-indexing
-        indexer.close()
+        _auto_index(args, days_to_index)
 
     search = ConversationSearch()
 
@@ -397,6 +410,8 @@ def main():
     search_parser.add_argument('--content', action='store_true', help='Show full content')
     search_parser.add_argument('--json', action='store_true', help='Output as JSON')
     search_parser.add_argument('--no-index', action='store_true', help='Skip auto-indexing (faster but may be stale)')
+    search_parser.add_argument('--index-timeout', type=float, default=5.0, help='Soft auto-index time budget in seconds (default: 5)')
+    search_parser.add_argument('--index-limit', type=int, default=200, help='Auto-index file budget (default: 200)')
     search_parser.set_defaults(func=cmd_search)
 
     # context command
@@ -406,6 +421,8 @@ def main():
     context_parser.add_argument('--content', action='store_true', help='Show full content')
     context_parser.add_argument('--json', action='store_true', help='Output as JSON')
     context_parser.add_argument('--no-index', action='store_true', help='Skip auto-indexing (faster but may be stale)')
+    context_parser.add_argument('--index-timeout', type=float, default=5.0, help='Soft auto-index time budget in seconds (default: 5)')
+    context_parser.add_argument('--index-limit', type=int, default=200, help='Auto-index file budget (default: 200)')
     context_parser.set_defaults(func=cmd_context)
 
     # list command
@@ -417,6 +434,8 @@ def main():
     list_parser.add_argument('--limit', type=int, default=20, help='Max results (default: 20)')
     list_parser.add_argument('--json', action='store_true', help='Output as JSON')
     list_parser.add_argument('--no-index', action='store_true', help='Skip auto-indexing (faster but may be stale)')
+    list_parser.add_argument('--index-timeout', type=float, default=5.0, help='Soft auto-index time budget in seconds (default: 5)')
+    list_parser.add_argument('--index-limit', type=int, default=200, help='Auto-index file budget (default: 200)')
     list_parser.set_defaults(func=cmd_list)
 
     # tree command

@@ -8,7 +8,7 @@ Find and resume past Claude Code conversations using smart hybrid extraction and
 - **Unified CLI**: Single `cc-conversation-search` command with intuitive subcommands
 - **Calendar Date Filtering**: Intuitive `--date yesterday`, `--since`, `--until` parameters
 - **Smart Extraction**: Hybrid indexing (full user content + smart assistant extraction)
-- **JIT Indexing**: Instant indexing before search (no AI calls, no delays)
+- **Bounded Incremental Indexing**: Parse only changed files, with explicit time and file budgets
 - **Local Timezone Display**: All timestamps shown in your local time
 - **Meta-Conversation Filtering**: Automatically excludes search tool usage from results
 - **Progressive Exploration**: Simple search → broader search → manual exploration
@@ -67,6 +67,9 @@ cp skills/conversation-search/* ~/.claude/skills/conversation-search/
 # Search for conversations (shows session ID and resume commands)
 cc-conversation-search search "authentication bug"
 
+# Find an exact session without indexing unrelated history
+cc-conversation-search search "01234567-89ab-cdef-0123-456789abcdef"
+
 # Search with calendar date filters
 cc-conversation-search search "react hooks" --date yesterday
 cc-conversation-search search "auth" --since 2025-11-10 --until 2025-11-13
@@ -77,6 +80,9 @@ cc-conversation-search list --since "2025-11-01"
 
 # Traditional relative time filters still work
 cc-conversation-search search "query" --days 30
+
+# Override the bounded auto-index budget when catching up a large existing index
+cc-conversation-search search "query" --index-timeout 15 --index-limit 1000
 
 # Get resume commands for a specific message
 cc-conversation-search resume <MESSAGE_UUID>
@@ -191,8 +197,9 @@ cc-conversation-search tree SESSION_ID [--json]
 3. **Meta-Conversation Filtering**: Automatically detects and excludes conversations where Claude used the search tool (prevents search results pollution)
 4. **Search**: FTS5 full-text search over extracted content with conversation tree traversal
 5. **Calendar Date Filtering**: Intuitive date parameters (`--date yesterday`) using SQLite date functions
-6. **JIT Indexing**: Skill runs `index` before `search` for fresh data (instant, no AI calls)
-7. **Local Timezone Display**: All timestamps converted to your local timezone for readability
+6. **Incremental JIT Indexing**: Search, context, and list compare file metadata and parse only new or changed JSONL files. Auto-indexing is bounded to 200 files and a 5-second soft budget per command; discovery observes the deadline, the current file finishes atomically, and unfinished files are retried on the next run.
+7. **Exact Session Fast Path**: A full session UUID is looked up and refreshed directly without indexing unrelated conversations.
+8. **Local Timezone Display**: All timestamps converted to your local timezone for readability
 
 ## Claude Code Skill
 
@@ -293,7 +300,8 @@ indexer.close()
 ## Performance
 
 - **Smart Extraction**: Instant (no AI calls), deterministic
-- **Indexing Speed**: ~1000+ messages/second (no API latency)
+- **Repeat Indexing**: Unchanged files are checked via size + nanosecond mtime and are not parsed
+- **Auto-Index Bound**: 200 changed files and a 5-second soft budget by default, with stderr diagnostics when a budget is reached
 - **Storage**: ~1-2KB per message (extracted text + metadata)
 - **Search Speed**: SQLite FTS5 is very fast, even with 100K+ messages
 - **Cost**: $0 (no AI API calls during indexing)
